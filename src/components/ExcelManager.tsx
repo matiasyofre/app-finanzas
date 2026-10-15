@@ -4,7 +4,7 @@ import { useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { getSupabase, type NuevaTransaccion } from '@/lib/supabase/client';
 import { notifyChange } from '@/lib/offlineQueue';
-import { useCatalogs } from '@/lib/catalogs';
+import { useCatalogs, notifyCatalogs } from '@/lib/catalogs';
 import { money } from '@/lib/format';
 import Modal from './Modal';
 
@@ -264,17 +264,47 @@ export default function ExcelManager() {
     const sb = getSupabase();
 
     try {
+      const userRes = await sb.auth.getUser();
+      const user = userRes.data?.user;
+      if (!user) {
+        setStatusMsg({ type: 'err', text: 'Sesión no encontrada. Por favor volvé a iniciar sesión.' });
+        setImporting(false);
+        return;
+      }
+
+      // Auto-crear cuentas o tarjetas que no existan aún en el catálogo
+      const cuentaCache = new Map<string, string>();
+      for (const c of cuentas) {
+        cuentaCache.set(c.nombre.toLowerCase().trim(), c.id);
+      }
+
+      for (const row of validRows) {
+        if (row.cuenta_nombre && !cuentaCache.has(row.cuenta_nombre.toLowerCase().trim())) {
+          const ctaName = row.cuenta_nombre.trim();
+          const tipo = row.cuotas_totales > 1 || /tarjeta|naranja|visa|master|amex/i.test(ctaName) ? 'credito' : 'debito';
+          const { data: newCta } = await sb
+            .from('cuentas_tarjetas')
+            .insert({
+              usuario_id: user.id,
+              nombre: ctaName,
+              tipo,
+              activa: true,
+            })
+            .select('id')
+            .single();
+
+          if (newCta?.id) {
+            cuentaCache.set(ctaName.toLowerCase(), newCta.id);
+          }
+        }
+      }
+
       const payload: NuevaTransaccion[] = validRows.map((row) => {
-        // Encontrar o emparejar cuenta por nombre (case-insensitive)
         let cuenta_id: string | null = null;
         if (row.cuenta_nombre) {
-          const matchCuenta = cuentas.find(
-            (c) => c.nombre.toLowerCase().trim() === row.cuenta_nombre?.toLowerCase().trim(),
-          );
-          if (matchCuenta) cuenta_id = matchCuenta.id;
+          cuenta_id = cuentaCache.get(row.cuenta_nombre.toLowerCase().trim()) ?? null;
         }
 
-        // Encontrar o emparejar categoría por nombre
         let categoria_id: string | null = null;
         if (row.categoria_nombre) {
           const matchCat = categorias.find(
@@ -303,6 +333,7 @@ export default function ExcelManager() {
       if (error) throw error;
 
       notifyChange();
+      notifyCatalogs();
       setStatusMsg({ type: 'ok', text: `¡Se importaron ${payload.length} movimientos con éxito!` });
       setTimeout(() => {
         setOpenModal(false);
@@ -366,7 +397,7 @@ export default function ExcelManager() {
         onClose={() => !importing && setOpenModal(false)}
         title="Vista previa de importación"
       >
-        <div className="space-y-4">
+        <div className="flex flex-col space-y-4">
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="rounded-xl bg-white/5 p-3">
               <span className="text-jade block">Movimientos detectados</span>
@@ -386,8 +417,8 @@ export default function ExcelManager() {
             </div>
           </div>
 
-          {/* Tabla resumen de filas */}
-          <div className="max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-spruce-900/60 divide-y divide-white/5 text-xs">
+          {/* Tabla resumen de filas con scroll interno */}
+          <div className="max-h-56 sm:max-h-64 overflow-y-auto rounded-xl border border-white/10 bg-spruce-900/80 divide-y divide-white/5 text-xs">
             {parsedRows.map((r, i) => (
               <div key={i} className={`p-2.5 flex items-center justify-between gap-3 ${r.error ? 'bg-debt/10' : ''}`}>
                 <div className="min-w-0 flex-1">
@@ -418,12 +449,13 @@ export default function ExcelManager() {
             </div>
           )}
 
-          <div className="flex gap-2 pt-2">
+          {/* Botones de acción siempre visibles y destacados */}
+          <div className="flex gap-2 pt-2 border-t border-white/10">
             <button
               type="button"
               disabled={importing}
               onClick={() => setOpenModal(false)}
-              className="flex-1 rounded-xl border border-white/10 py-2.5 text-xs font-medium text-jade hover:bg-white/5 transition"
+              className="flex-1 rounded-xl border border-white/10 py-3 text-xs font-medium text-jade hover:bg-white/5 transition"
             >
               Cancelar
             </button>
@@ -431,9 +463,9 @@ export default function ExcelManager() {
               type="button"
               disabled={importing || parsedRows.filter((r) => !r.error).length === 0}
               onClick={handleConfirmImport}
-              className="btn-primary flex-1 py-2.5 text-xs font-semibold"
+              className="btn-primary flex-1 py-3 text-xs font-bold shadow-glow"
             >
-              {importing ? 'Importando...' : `Confirmar (${parsedRows.filter((r) => !r.error).length})`}
+              {importing ? 'Importando...' : `✓ Confirmar e importar (${parsedRows.filter((r) => !r.error).length})`}
             </button>
           </div>
         </div>
