@@ -8,10 +8,10 @@ import BottomNav from '@/components/BottomNav';
 const outfit = Outfit({ subsets: ['latin'], variable: '--font-outfit', display: 'swap' });
 
 export const metadata: Metadata = {
-  title: 'Cuotas · Control de gastos y proyección de cashflow',
-  description: 'Cargá gastos en cuotas en segundos y mirá cuánta plata se libera el mes que viene.',
-  applicationName: 'Cuotas',
-  appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'Cuotas' },
+  title: 'App Finanzas · Control de gastos, cuotas y cuentas',
+  description: 'Gestión inteligente de finanzas personales, cuotas, cuentas bancarias y proyección de cashflow.',
+  applicationName: 'App Finanzas',
+  appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'App Finanzas' },
 };
 
 export const viewport: Viewport = {

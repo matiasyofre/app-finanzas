@@ -1,6 +1,6 @@
 import ProyeccionesManager from '@/components/ProyeccionesManager';
 
-export const metadata = { title: 'Proyecciones 12 meses · Cuotas' };
+export const metadata = { title: 'Proyecciones 12 meses · App Finanzas' };
 
 export default function Proyecciones() {
   return (

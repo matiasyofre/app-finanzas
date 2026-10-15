@@ -150,8 +150,8 @@ export default function QuickAddFab() {
         id="fab-quick-add"
         aria-label="Cargar gasto"
         onClick={() => setOpen(true)}
-        className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-40 flex h-16 w-16 items-center justify-center rounded-full
-                   bg-gradient-to-br from-teal to-cyan text-spruce-900 shadow-glow transition hover:scale-105 active:scale-95"
+        className="fixed bottom-[calc(max(1rem,env(safe-area-inset-bottom))+4rem)] right-4 z-40 flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full
+                   bg-gradient-to-br from-teal to-cyan text-spruce-900 shadow-glow transition hover:scale-105 active:scale-95 md:bottom-8 md:right-8"
       >
         <svg viewBox="0 0 24 24" className={`h-7 w-7 transition-transform ${open ? 'rotate-45' : ''}`} fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round">
           <path d="M12 5v14M5 12h14" />

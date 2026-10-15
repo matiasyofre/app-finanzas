@@ -11,7 +11,7 @@ export type Categoria = {
   tipo: 'ingreso' | 'egreso';
 };
 
-export type TipoCuenta = 'efectivo' | 'debito' | 'credito' | 'prestamo' | 'billetera';
+export type TipoCuenta = 'efectivo' | 'debito' | 'banco' | 'credito' | 'prestamo' | 'billetera' | 'otro';
 
 export type Cuenta = {
   id: string;
@@ -20,13 +20,15 @@ export type Cuenta = {
   dia_cierre: number | null;
   dia_vencimiento: number | null;
   activa: boolean;
+  saldo_inicial?: number | null;
 };
 
 export const TIPOS_CUENTA: { value: TipoCuenta; label: string; icon: string }[] = [
+  { value: 'billetera', label: 'Billetera virtual (MP, Ualá, etc.)', icon: '📱' },
+  { value: 'banco', label: 'Cuenta bancaria (Caja de ahorro)', icon: '🏛️' },
+  { value: 'debito', label: 'Tarjeta de débito', icon: '🏦' },
   { value: 'credito', label: 'Tarjeta de crédito', icon: '💳' },
-  { value: 'debito', label: 'Débito', icon: '🏦' },
   { value: 'efectivo', label: 'Efectivo', icon: '💵' },
-  { value: 'billetera', label: 'Billetera virtual', icon: '📱' },
   { value: 'prestamo', label: 'Préstamo', icon: '📄' },
 ];
 
@@ -45,10 +47,15 @@ export function useCatalogs() {
     const sb = getSupabase();
     const [c, t] = await Promise.all([
       sb.from('categorias').select('id,nombre,icono,color,tipo').order('nombre'),
-      sb.from('cuentas_tarjetas').select('id,nombre,tipo,dia_cierre,dia_vencimiento,activa').order('nombre'),
+      sb.from('cuentas_tarjetas').select('*').order('nombre'),
     ]);
     setCategorias((c.data ?? []) as Categoria[]);
-    setCuentas((t.data ?? []) as Cuenta[]);
+    setCuentas(
+      ((t.data ?? []) as Cuenta[]).map((row) => ({
+        ...row,
+        saldo_inicial: Number(row.saldo_inicial ?? 0),
+      })),
+    );
     setLoading(false);
   }, []);
 

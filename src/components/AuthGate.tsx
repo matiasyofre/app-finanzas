@@ -5,13 +5,15 @@ import type { Session } from '@supabase/supabase-js';
 import { getSupabase } from '@/lib/supabase/client';
 import { flushQueue } from '@/lib/offlineQueue';
 
-type AuthMode = 'password' | 'signup' | 'magic';
+type AuthMode = 'password' | 'magic';
 
-/** Login con soporte para Email + Contraseña (sin rate limit) y Magic Link opcional. */
+const ALLOWED_EMAIL = 'matiyofre@gmail.com';
+
+/** Login exclusivo para matiyofre@gmail.com con soporte para contraseña y magic link. */
 export default function AuthGate({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [mode, setMode] = useState<AuthMode>('password');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(ALLOWED_EMAIL);
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
@@ -33,10 +35,19 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   if (session === undefined) return <div className="min-h-dvh bg-spruce-900" />;
   if (session) return <>{children}</>;
 
+  const checkAllowed = (targetEmail: string): boolean => {
+    if (targetEmail.trim().toLowerCase() !== ALLOWED_EMAIL) {
+      setErr(`Acceso restringido: Esta aplicación es privada y de uso exclusivo para ${ALLOWED_EMAIL}.`);
+      return false;
+    }
+    return true;
+  };
+
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr(null);
     setInfo(null);
+    if (!checkAllowed(email)) return;
     setLoading(true);
 
     try {
@@ -47,9 +58,9 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
 
       if (error) {
         if (error.message.includes('Invalid login credentials')) {
-          setErr('Credenciales incorrectas. Verificá tu email y contraseña.');
+          setErr('Credenciales incorrectas. Verificá tu contraseña.');
         } else if (error.message.includes('Email not confirmed')) {
-          setErr('El email aún no fue confirmado. Podés confirmarlo en tu casilla o desde el panel de Supabase.');
+          setErr('El email aún no fue confirmado. Podés confirmarlo desde el panel de Supabase.');
         } else {
           setErr(error.message);
         }
@@ -61,41 +72,11 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const handleSignUp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErr(null);
-    setInfo(null);
-    setLoading(true);
-
-    try {
-      const { data, error } = await getSupabase().auth.signUp({
-        email: email.trim(),
-        password,
-      });
-
-      if (error) {
-        if (error.message.includes('rate limit')) {
-          setErr('Límite de emails de Supabase alcanzado. Podés crear/asignar la contraseña directamente desde el panel de Supabase (Authentication -> Users).');
-        } else {
-          setErr(error.message);
-        }
-      } else if (data.session) {
-        // Logueado automáticamente (auto-confirm activo)
-        setSession(data.session);
-      } else {
-        setInfo('Cuenta creada. Si tu proyecto de Supabase tiene "Confirm email" activado, confirmalo en tu correo o desde el panel de Supabase.');
-      }
-    } catch (errCatch: unknown) {
-      setErr(errCatch instanceof Error ? errCatch.message : 'Error al registrarse');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr(null);
     setInfo(null);
+    if (!checkAllowed(email)) return;
     setLoading(true);
 
     try {
@@ -106,7 +87,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
 
       if (error) {
         if (error.status === 429 || error.message.toLowerCase().includes('rate limit')) {
-          setErr('Límite de emails por hora alcanzado en Supabase (429). Ingresá con contraseña para acceder de inmediato.');
+          setErr('Límite de emails alcanzado en Supabase (429). Ingresá con contraseña para acceder de inmediato.');
         } else {
           setErr(error.message);
         }
@@ -126,10 +107,10 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
         <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-teal to-cyan text-2xl font-bold text-spruce-900 shadow-glow">
           $
         </div>
-        <h1 className="text-center text-2xl font-semibold text-pebble">Cuotas</h1>
-        <p className="mt-2 text-center text-sm text-jade">Sabé cuánta plata se libera el mes que viene.</p>
+        <h1 className="text-center text-2xl font-semibold text-pebble">App Finanzas</h1>
+        <p className="mt-2 text-center text-sm text-jade">Control de gastos, cuotas y cuentas bancarias.</p>
 
-        {/* Selector de modo */}
+        {/* Selector de modo (Contraseña o Magic Link) */}
         <div className="mt-6 flex rounded-xl bg-white/5 p-1 text-xs">
           <button
             type="button"
@@ -149,15 +130,6 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
           >
             Magic Link
           </button>
-          <button
-            type="button"
-            onClick={() => { setMode('signup'); setErr(null); setInfo(null); }}
-            className={`flex-1 rounded-lg py-2 font-medium transition ${
-              mode === 'signup' ? 'bg-teal text-pebble shadow' : 'text-jade hover:text-pebble'
-            }`}
-          >
-            Crear cuenta
-          </button>
         </div>
 
         {info && (
@@ -166,7 +138,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
           </div>
         )}
 
-        {/* Formulario según modo */}
+        {/* Formulario con contraseña */}
         {mode === 'password' && (
           <form onSubmit={handlePasswordLogin} className="mt-6 space-y-3">
             <div>
@@ -178,7 +150,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="tu@email.com"
+                placeholder="matiyofre@gmail.com"
                 className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3.5 text-pebble placeholder:text-jade/60 outline-none focus:border-cyan/60"
               />
             </div>
@@ -207,47 +179,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
           </form>
         )}
 
-        {mode === 'signup' && (
-          <form onSubmit={handleSignUp} className="mt-6 space-y-3">
-            <div>
-              <label className="label mb-1.5 block">Email</label>
-              <input
-                id="signup-email"
-                type="email"
-                required
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="tu@email.com"
-                className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3.5 text-pebble placeholder:text-jade/60 outline-none focus:border-cyan/60"
-              />
-            </div>
-            <div>
-              <label className="label mb-1.5 block">Contraseña nueva</label>
-              <input
-                id="signup-password"
-                type="password"
-                required
-                minLength={6}
-                autoComplete="new-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Mínimo 6 caracteres"
-                className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3.5 text-pebble placeholder:text-jade/60 outline-none focus:border-cyan/60"
-              />
-            </div>
-
-            <button
-              id="signup-submit"
-              type="submit"
-              disabled={loading}
-              className="btn-primary w-full disabled:opacity-50"
-            >
-              {loading ? 'Creando cuenta...' : 'Crear mi cuenta'}
-            </button>
-          </form>
-        )}
-
+        {/* Formulario con Magic Link */}
         {mode === 'magic' && (
           <form onSubmit={handleMagicLink} className="mt-6 space-y-3">
             <div>
@@ -259,7 +191,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="tu@email.com"
+                placeholder="matiyofre@gmail.com"
                 className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3.5 text-pebble placeholder:text-jade/60 outline-none focus:border-cyan/60"
               />
             </div>
@@ -283,19 +215,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
 
         <div className="mt-6 border-t border-white/5 pt-4 text-center">
           <p className="text-xs text-jade/70">
-            {mode === 'password' ? (
-              <span>
-                ¿Sin contraseña? Usá la pestaña <strong>Magic Link</strong> o asignate una en tu panel de Supabase.
-              </span>
-            ) : mode === 'magic' ? (
-              <span>
-                ¿Tenés error 429 de límite? Entrá con tu <strong>Contraseña</strong>.
-              </span>
-            ) : (
-              <span>
-                ¿Ya tenés cuenta? Cambiá a la pestaña <strong>Contraseña</strong>.
-              </span>
-            )}
+            🔒 Acceso restringido exclusivamente a <strong>matiyofre@gmail.com</strong>
           </p>
         </div>
       </div>

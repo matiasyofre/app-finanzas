@@ -171,7 +171,7 @@ function Categorias({ items }: { items: Categoria[] }) {
 /* ------------------------------ Tarjetas ------------------------------ */
 
 type CtaDraft = Omit<Cuenta, 'id'> & { id?: string };
-const emptyCta: CtaDraft = { nombre: '', tipo: 'credito', dia_cierre: null, dia_vencimiento: null, activa: true };
+const emptyCta: CtaDraft = { nombre: '', tipo: 'billetera', saldo_inicial: 0, dia_cierre: null, dia_vencimiento: null, activa: true };
 
 function Tarjetas({ items }: { items: Cuenta[] }) {
   const [draft, setDraft] = useState<CtaDraft | null>(null);
@@ -182,19 +182,34 @@ function Tarjetas({ items }: { items: Cuenta[] }) {
   const save = async () => {
     if (!draft?.nombre.trim()) return setErr('Poné un nombre.');
     const esCredito = draft.tipo === 'credito';
-    const payload = {
+    const payload: Record<string, unknown> = {
       nombre: draft.nombre.trim(),
       tipo: draft.tipo,
+      saldo_inicial: Number(draft.saldo_inicial) || 0,
       dia_cierre: esCredito ? draft.dia_cierre : null,
       dia_vencimiento: esCredito ? draft.dia_vencimiento : null,
       activa: draft.activa,
     };
     const sb = getSupabase();
-    const { error } = draft.id
-      ? await sb.from('cuentas_tarjetas').update(payload).eq('id', draft.id)
-      : await sb.from('cuentas_tarjetas').insert(payload);
-    if (error) return setErr(error.message);
-    notifyCatalogs(); notifyChange(); setDraft(null);
+    try {
+      const { error } = draft.id
+        ? await sb.from('cuentas_tarjetas').update(payload).eq('id', draft.id)
+        : await sb.from('cuentas_tarjetas').insert(payload);
+      if (error) {
+        if (error.message.includes('saldo_inicial')) {
+          delete payload.saldo_inicial;
+          const retry = draft.id
+            ? await sb.from('cuentas_tarjetas').update(payload).eq('id', draft.id)
+            : await sb.from('cuentas_tarjetas').insert(payload);
+          if (retry.error) return setErr(retry.error.message);
+        } else {
+          return setErr(error.message);
+        }
+      }
+      notifyCatalogs(); notifyChange(); setDraft(null);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Error al guardar');
+    }
   };
 
   const remove = async () => {
@@ -248,6 +263,19 @@ function Tarjetas({ items }: { items: Cuenta[] }) {
                 ))}
               </div>
             </div>
+            {draft.tipo !== 'credito' && draft.tipo !== 'prestamo' && (
+              <label className="block">
+                <span className="label">Saldo actual inicial ($ ARS)</span>
+                <input
+                  type="number"
+                  step="any"
+                  className={input}
+                  value={draft.saldo_inicial || ''}
+                  onChange={(e) => setDraft({ ...draft, saldo_inicial: parseFloat(e.target.value) || 0 })}
+                  placeholder="0"
+                />
+              </label>
+            )}
             {draft.tipo === 'credito' && (
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">

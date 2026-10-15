@@ -7,6 +7,7 @@ import { cuentaIcon, useCatalogs } from '@/lib/catalogs';
 import { monthDiff, todayISO } from '@/lib/cuotas';
 import { money } from '@/lib/format';
 import TransactionEditor, { type Transaccion } from './TransactionEditor';
+import ExcelManager from './ExcelManager';
 
 type Filtro = 'todos' | 'activos' | 'pendientes' | 'saldados' | 'fijo' | 'variable' | 'compartido' | 'egreso' | 'ingreso';
 
@@ -176,7 +177,7 @@ export default function MovimientosGrid() {
         </div>
       </div>
 
-      {/* Buscador y filtros de píldora */}
+      {/* Buscador y filtros de píldora con Importación/Plantilla Excel */}
       <div className="glass animate-rise space-y-3 p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center">
           <div className="relative flex-1">
@@ -196,9 +197,12 @@ export default function MovimientosGrid() {
               </button>
             )}
           </div>
-          <span className="text-xs text-jade md:text-right">
-            {visibles.length} de {rows?.length ?? 0} movimientos
-          </span>
+          <div className="flex flex-wrap items-center justify-between gap-3 md:justify-end">
+            <ExcelManager />
+            <span className="text-xs text-jade whitespace-nowrap">
+              {visibles.length} de {rows?.length ?? 0}
+            </span>
+          </div>
         </div>
 
         <div className="no-scrollbar flex gap-2 overflow-x-auto pt-1">

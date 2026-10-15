@@ -1,6 +1,6 @@
 import MovimientosGrid from '@/components/MovimientosGrid';
 
-export const metadata = { title: 'Movimientos · Cuotas' };
+export const metadata = { title: 'Movimientos · App Finanzas' };
 
 export default function Movimientos() {
   return (

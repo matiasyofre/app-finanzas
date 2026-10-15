@@ -6,10 +6,6 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  Legend,
-  Line,
-  LineChart,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -29,10 +25,35 @@ const COLOR_PRESTAMOS = '#A78BFA'; // Púrpura suave
 const COLOR_FIJOS = '#0F766E'; // Teal
 const COLOR_CYAN = '#22D3EE'; // Cyan
 
+type TxRow = {
+  id: string;
+  descripcion: string;
+  monto_total: number;
+  cuotas_totales: number;
+  cuota_actual: number;
+  monto_cuota: number | null;
+  fecha_compra: string;
+  fecha_primera_cuota: string | null;
+  tipo: 'ingreso' | 'egreso';
+  naturaleza?: 'fijo' | 'variable' | 'compartido';
+  porcentaje_propio?: number;
+  pagado_por?: 'yo' | 'otro';
+  saldado?: boolean;
+  es_recurrente?: boolean;
+  cuenta_id?: string | null;
+  cuentas_tarjetas?: { id: string; nombre: string; tipo: string } | null;
+};
+
+type CuotaCustom = {
+  transaccion_id: string;
+  nro_cuota: number;
+  monto_cuota: number;
+  saldada: boolean;
+};
+
 export default function ProyeccionesManager() {
   const [tab, setTab] = useState<Tab>('consolidado');
   const [data, setData] = useState<ProyeccionDesglosada[] | null>(null);
-  const [cuentasData, setCuentasData] = useState<{ mes: string; cuenta: string; monto: number; tipo: string }[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -40,85 +61,134 @@ export default function ProyeccionesManager() {
     const sb = getSupabase();
     const startYM = todayISO().slice(0, 7);
 
-    // Intentar vía RPC get_proyeccion_desglosada o agrupar desde v_cronograma_cuotas
     try {
-      const { data: rpcRows, error: rpcErr } = await sb.rpc('get_proyeccion_desglosada', { p_meses: 12 });
-      if (!rpcErr && rpcRows && rpcRows.length > 0) {
-        setData(
-          (rpcRows as ProyeccionDesglosada[]).map((r) => ({
-            ...r,
-            ingresos: Number(r.ingresos),
-            tarjetas: Number(r.tarjetas),
-            prestamos: Number(r.prestamos),
-            fijos: Number(r.fijos),
-            variables: Number(r.variables),
-            total_egresos: Number(r.total_egresos),
-            saldo_neto: Number(r.saldo_neto),
-          })),
-        );
-      } else {
-        // Fallback: consultar v_cronograma_cuotas directamente
-        const { data: rawRows } = await sb
-          .from('v_cronograma_cuotas')
-          .select('mes, tipo, naturaleza, cuenta_tipo, monto')
-          .gte('mes', `${startYM}-01`);
+      // 1. Obtener todas las transacciones activas con su cuenta asociada
+      const [txRes, cuotasCustomRes] = await Promise.all([
+        sb
+          .from('transacciones')
+          .select('id,descripcion,monto_total,cuotas_totales,cuota_actual,monto_cuota,fecha_compra,fecha_primera_cuota,tipo,naturaleza,porcentaje_propio,pagado_por,saldado,es_recurrente,cuenta_id,cuentas_tarjetas(id,nombre,tipo)'),
+        sb.from('transacciones_cuotas').select('transaccion_id,nro_cuota,monto_cuota,saldada'),
+      ]);
 
-        const meses12: ProyeccionDesglosada[] = Array.from({ length: 12 }).map((_, i) => {
-          const ym = addMonths(startYM, i);
-          return {
-            mes: `${ym}-01`,
-            ingresos: 0,
-            tarjetas: 0,
-            prestamos: 0,
-            fijos: 0,
-            variables: 0,
-            total_egresos: 0,
-            saldo_neto: 0,
-          };
-        });
+      const transacciones = (txRes.data ?? []) as unknown as TxRow[];
+      const cuotasCustom = (cuotasCustomRes.data ?? []) as CuotaCustom[];
 
-        const mesMap = new Map<string, ProyeccionDesglosada>(meses12.map((m) => [m.mes.slice(0, 7), m]));
-
-        for (const row of rawRows ?? []) {
-          const ym = (row.mes as string).slice(0, 7);
-          const target = mesMap.get(ym);
-          if (!target) continue;
-          const m = Number(row.monto);
-          if (row.tipo === 'ingreso') {
-            target.ingresos += m;
-          } else {
-            if (row.cuenta_tipo === 'credito') target.tarjetas += m;
-            else if (row.cuenta_tipo === 'prestamo') target.prestamos += m;
-            else if (row.naturaleza === 'fijo') target.fijos += m;
-            else target.variables += m;
-            target.total_egresos += m;
-          }
-        }
-
-        for (const item of meses12) {
-          item.saldo_neto = item.ingresos - item.total_egresos;
-        }
-
-        setData(meses12);
+      // Mapear ajustes de cuotas personalizadas
+      const customMap = new Map<string, number>();
+      for (const cc of cuotasCustom) {
+        customMap.set(`${cc.transaccion_id}:${cc.nro_cuota}`, Number(cc.monto_cuota));
       }
 
-      // Detalle de cuentas para gráficos específicos
-      const { data: rawDetalle } = await sb
-        .from('v_cronograma_cuotas')
-        .select('mes, cuenta_tipo, cuenta_nombre, monto')
-        .eq('tipo', 'egreso')
-        .gte('mes', `${startYM}-01`);
+      // Preparar estructura de los 12 meses futuros
+      const meses12: ProyeccionDesglosada[] = Array.from({ length: 12 }).map((_, i) => {
+        const ym = addMonths(startYM, i);
+        return {
+          mes: `${ym}-01`,
+          ingresos: 0,
+          tarjetas: 0,
+          prestamos: 0,
+          fijos: 0,
+          variables: 0,
+          total_egresos: 0,
+          saldo_neto: 0,
+        };
+      });
 
-      setCuentasData(
-        (rawDetalle ?? []).map((r) => ({
-          mes: (r.mes as string).slice(0, 7),
-          cuenta: (r.cuenta_nombre as string) || 'Sin asignar',
-          monto: Number(r.monto),
-          tipo: (r.cuenta_tipo as string) || 'otro',
-        })),
+      const mesMap = new Map<string, ProyeccionDesglosada>(
+        meses12.map((m) => [m.mes.slice(0, 7), m]),
       );
-    } catch {
-      // Ignorar errores transitorios de red
+
+      // 2. Procesar cada transacción y proyectarla
+      for (const tx of transacciones) {
+        const montoTotal = Number(tx.monto_total) || 0;
+        const cuotasTotales = Math.max(1, Number(tx.cuotas_totales) || 1);
+        const cuotaActual = Math.max(1, Math.min(cuotasTotales, Number(tx.cuota_actual) || 1));
+        const baseCuota = tx.monto_cuota ? Number(tx.monto_cuota) : montoTotal / cuotasTotales;
+
+        const baseYM = (tx.fecha_primera_cuota || tx.fecha_compra || todayISO()).slice(0, 7);
+        const naturaleza = tx.naturaleza || (tx.tipo === 'ingreso' ? 'fijo' : 'variable');
+        const pctPropio = (tx.porcentaje_propio ?? 100) / 100;
+        const pagadoPor = tx.pagado_por ?? 'yo';
+
+        const cuentaTipo = tx.cuentas_tarjetas?.tipo;
+        const esPrestamo = cuentaTipo === 'prestamo' || tx.descripcion.toLowerCase().includes('préstamo') || tx.descripcion.toLowerCase().includes('prestamo');
+        const esCuota = cuotasTotales > 1 || cuentaTipo === 'credito';
+        const esFijo = naturaleza === 'fijo' || tx.es_recurrente || (tx.tipo === 'ingreso' && /sueldo|honorarios|salario/i.test(tx.descripcion));
+
+        // Caso A: Ingresos
+        if (tx.tipo === 'ingreso') {
+          if (esFijo) {
+            // Ingreso fijo mensual: proyectar en todos los meses futuros a partir de baseYM
+            for (const item of meses12) {
+              const ym = item.mes.slice(0, 7);
+              if (ym >= baseYM) {
+                item.ingresos += montoTotal;
+              }
+            }
+          } else {
+            // Ingreso puntual
+            const target = mesMap.get(baseYM);
+            if (target) target.ingresos += montoTotal;
+          }
+          continue;
+        }
+
+        // Caso B: Egresos en cuotas (tarjetas o préstamos)
+        if (esCuota) {
+          for (let n = cuotaActual; n <= cuotasTotales; n++) {
+            const cuotaYM = addMonths(baseYM, n - cuotaActual);
+            const target = mesMap.get(cuotaYM);
+            if (!target) continue;
+
+            const cuotaPersonalizada = customMap.get(`${tx.id}:${n}`);
+            let nominal = cuotaPersonalizada ?? baseCuota;
+            if (n === cuotasTotales && !cuotaPersonalizada) {
+              nominal = montoTotal - baseCuota * (cuotasTotales - 1);
+            }
+
+            // Si es compartido:
+            // Si lo pagó 'yo': mi gasto real es el porcentaje propio
+            // Si lo pagó 'otro': debo abonar mi porcentaje
+            const montoBolsillo = round2(nominal * pctPropio);
+
+            if (esPrestamo) {
+              target.prestamos += montoBolsillo;
+            } else {
+              target.tarjetas += montoBolsillo;
+            }
+          }
+          continue;
+        }
+
+        // Caso C: Egresos fijos de un solo pago recurrente
+        if (esFijo) {
+          const montoBolsillo = round2(montoTotal * pctPropio);
+          for (const item of meses12) {
+            const ym = item.mes.slice(0, 7);
+            if (ym >= baseYM) {
+              item.fijos += montoBolsillo;
+            }
+          }
+          continue;
+        }
+
+        // Caso D: Egresos variables puntuales
+        const target = mesMap.get(baseYM);
+        if (target) {
+          const montoBolsillo = round2(montoTotal * pctPropio);
+          target.variables += montoBolsillo;
+        }
+      }
+
+      // 3. Totalizar egresos y saldo neto por mes
+      for (const item of meses12) {
+        item.total_egresos = round2(item.tarjetas + item.prestamos + item.fijos + item.variables);
+        item.saldo_neto = round2(item.ingresos - item.total_egresos);
+      }
+
+      setData(meses12);
+    } catch (err) {
+      console.error('Error calculando proyecciones:', err);
     } finally {
       setLoading(false);
     }
@@ -127,22 +197,39 @@ export default function ProyeccionesManager() {
   useEffect(() => {
     load();
     window.addEventListener(TX_EVENT, load);
-    return () => window.removeEventListener(TX_EVENT, load);
+
+    // Suscripción en tiempo real a cambios en transacciones
+    const sb = getSupabase();
+    const channel = sb
+      .channel('realtime:proyecciones')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transacciones' }, () => {
+        load();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transacciones_cuotas' }, () => {
+        load();
+      })
+      .subscribe();
+
+    return () => {
+      window.removeEventListener(TX_EVENT, load);
+      sb.removeChannel(channel);
+    };
   }, [load]);
 
   // Totales acumulados 12 meses
   const totales12m = useMemo(() => {
-    if (!data) return { ingresos: 0, tarjetas: 0, prestamos: 0, fijos: 0, egresos: 0, saldo: 0 };
+    if (!data) return { ingresos: 0, tarjetas: 0, prestamos: 0, fijos: 0, variables: 0, egresos: 0, saldo: 0 };
     return data.reduce(
       (acc, r) => ({
         ingresos: acc.ingresos + r.ingresos,
         tarjetas: acc.tarjetas + r.tarjetas,
         prestamos: acc.prestamos + r.prestamos,
         fijos: acc.fijos + r.fijos,
+        variables: acc.variables + r.variables,
         egresos: acc.egresos + r.total_egresos,
         saldo: acc.saldo + r.saldo_neto,
       }),
-      { ingresos: 0, tarjetas: 0, prestamos: 0, fijos: 0, egresos: 0, saldo: 0 },
+      { ingresos: 0, tarjetas: 0, prestamos: 0, fijos: 0, variables: 0, egresos: 0, saldo: 0 },
     );
   }, [data]);
 
@@ -302,7 +389,7 @@ export default function ProyeccionesManager() {
               <p className="num mt-1 text-2xl font-bold text-cyan">
                 {(() => {
                   const max = [...data].sort((a, b) => b.tarjetas - a.tarjetas)[0];
-                  return max ? `${monthLabel(max.mes)} (${compact(max.tarjetas)})` : '—';
+                  return max && max.tarjetas > 0 ? `${monthLabel(max.mes)} (${compact(max.tarjetas)})` : '—';
                 })()}
               </p>
               <p className="text-[11px] text-jade">pico de vencimientos</p>
@@ -311,7 +398,7 @@ export default function ProyeccionesManager() {
 
           <section className="glass p-5 md:p-6">
             <h2 className="label text-sm">Vencimiento mensual de cuotas de tarjetas</h2>
-            <p className="text-xs text-jade">Evolución de resúmenes de tarjetas de crédito a lo largo del año</p>
+            <p className="text-xs text-jade">Evolución de resúmenes de tarjetas y compras en cuotas</p>
 
             <div className="mt-6 h-72 w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -326,7 +413,7 @@ export default function ProyeccionesManager() {
                       return (
                         <div className="glass-strong rounded-2xl p-3 text-xs shadow-xl">
                           <p className="font-semibold text-pebble capitalize mb-1">{r.mesFull}</p>
-                          <p className="num text-debt font-bold text-sm">Cuotas tarjeta: {money(r.tarjetas)}</p>
+                          <p className="num text-debt font-bold text-sm">Cuotas: {money(r.tarjetas)}</p>
                         </div>
                       );
                     }}
@@ -360,7 +447,7 @@ export default function ProyeccionesManager() {
             <div className="glass col-span-2 sm:col-span-1 p-4">
               <p className="label text-[11px]">Estado</p>
               <p className="num mt-1 text-2xl font-bold text-cyan">
-                {totales12m.prestamos > 0 ? 'Activo' : 'Sin deuda'}
+                {totales12m.prestamos > 0 ? 'Activo' : 'Sin deuda de préstamos'}
               </p>
               <p className="text-[11px] text-jade">líneas bancarias / préstamos</p>
             </div>
@@ -452,4 +539,8 @@ export default function ProyeccionesManager() {
       )}
     </div>
   );
+}
+
+function round2(v: number): number {
+  return Math.round((v + Number.EPSILON) * 100) / 100;
 }

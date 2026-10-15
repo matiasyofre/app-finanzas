@@ -1,6 +1,6 @@
 import AjustesManager from '@/components/AjustesManager';
 
-export const metadata = { title: 'Ajustes · Cuotas' };
+export const metadata = { title: 'Ajustes · App Finanzas' };
 
 export default function Ajustes() {
   return (

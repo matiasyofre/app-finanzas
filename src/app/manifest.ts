@@ -2,9 +2,9 @@ import type { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Cuotas · Finanzas personales',
-    short_name: 'Cuotas',
-    description: 'Control de gastos en cuotas y proyección de cashflow.',
+    name: 'App Finanzas · Finanzas personales',
+    short_name: 'App Finanzas',
+    description: 'Control de finanzas personales, cuotas, cuentas y proyección de cashflow.',
     start_url: '/',
     display: 'standalone',
     orientation: 'portrait',
