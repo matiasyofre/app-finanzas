@@ -2,12 +2,16 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 let client: SupabaseClient | null = null;
 
+const DEFAULT_URL = 'https://dexvovwtxutaelcfebki.supabase.co';
+const DEFAULT_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRleHZvdnd0eHV0YWVsY2ZlYmtpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIwNzk3MzIsImV4cCI6MjEwNzY1NTczMn0.RmPTq8MQTjaAwVAY2oFQ0ZzXdFFMNac9YamXrf4yJBE';
+
 /** Cliente singleton para el navegador (auth persistida en localStorage). */
 export function getSupabase(): SupabaseClient {
   if (!client) {
     client = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL ?? 'http://localhost:54321',
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? 'public-anon-key',
+      process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_URL,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || DEFAULT_ANON_KEY,
       { auth: { persistSession: true, autoRefreshToken: true } },
     );
   }
