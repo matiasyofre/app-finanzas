@@ -24,6 +24,8 @@ type ParsedRow = {
   error?: string;
 };
 
+import { parseExcelAmount } from '@/lib/parser/parseExpense';
+
 export default function ExcelManager() {
   const { categorias, cuentas } = useCatalogs();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -145,8 +147,8 @@ export default function ExcelManager() {
 
     reader.onload = (evt) => {
       try {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary', cellDates: true });
+        const buffer = evt.target?.result as ArrayBuffer;
+        const wb = XLSX.read(new Uint8Array(buffer), { type: 'array', cellDates: true });
         const sheetName = wb.SheetNames[0];
         const ws = wb.Sheets[sheetName];
 
@@ -159,15 +161,20 @@ export default function ExcelManager() {
 
         const parsed: ParsedRow[] = rawData.map((row) => {
           // Búsqueda flexible de columnas sin importar mayúsculas ni espacios
-          const getVal = (patterns: string[]): string => {
+          const getRawVal = (patterns: string[]): unknown => {
             const keys = Object.keys(row);
             for (const p of patterns) {
               const foundKey = keys.find((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes(p));
-              if (foundKey && row[foundKey] !== undefined && row[foundKey] !== null) {
-                return String(row[foundKey]).trim();
+              if (foundKey && row[foundKey] !== undefined && row[foundKey] !== null && row[foundKey] !== '') {
+                return row[foundKey];
               }
             }
-            return '';
+            return undefined;
+          };
+
+          const getVal = (patterns: string[]): string => {
+            const v = getRawVal(patterns);
+            return v !== undefined && v !== null ? String(v).trim() : '';
           };
 
           const rawFecha = getVal(['fecha']);
@@ -182,8 +189,8 @@ export default function ExcelManager() {
           }
 
           const descripcion = getVal(['descrip', 'detalle', 'concepto']) || 'Gasto importado';
-          const montoRaw = getVal(['monto', 'importe', 'total', 'precio']).replace(/[$.]/g, '').replace(',', '.');
-          const monto_total = Math.abs(parseFloat(montoRaw)) || 0;
+          const rawMonto = getRawVal(['montototal', 'monto', 'importe', 'total', 'precio']);
+          const monto_total = Math.abs(parseExcelAmount(rawMonto));
 
           const rawTipo = getVal(['tipo']).toLowerCase();
           const tipo: 'egreso' | 'ingreso' = rawTipo.includes('ingreso') ? 'ingreso' : 'egreso';
@@ -244,7 +251,7 @@ export default function ExcelManager() {
       }
     };
 
-    reader.readAsBinaryString(file);
+    reader.readAsArrayBuffer(file);
   };
 
   // 3. Confirmar importación a Supabase

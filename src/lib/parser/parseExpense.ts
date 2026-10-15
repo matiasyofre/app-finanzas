@@ -74,3 +74,38 @@ export function splitInstallments(total: number, n: number): { cuota: number; ul
   const ultima = cents - base * (n - 1);
   return { cuota: base / 100, ultima: ultima / 100 };
 }
+
+/** Parsea importes provenientes de celdas de Excel en cualquier formato numérico o string. */
+export function parseExcelAmount(raw: unknown): number {
+  if (typeof raw === 'number') {
+    return isNaN(raw) ? 0 : Math.round((raw + Number.EPSILON) * 100) / 100;
+  }
+  if (!raw) return 0;
+  let str = String(raw).trim().replace(/[$€£\s]/g, '');
+  if (!str) return 0;
+
+  // Si tiene formato argentino/europeo con miles y decimales: 129.484,32
+  if (/\.\d{3},\d{1,2}$/.test(str)) {
+    str = str.replace(/\./g, '').replace(',', '.');
+  }
+  // Si tiene coma como separador decimal: 129484,32
+  else if (/,\d{1,2}$/.test(str)) {
+    str = str.replace(/\./g, '').replace(',', '.');
+  }
+  // Si tiene formato anglosajón con comas de miles: 129,484.32
+  else if (/,\d{3}\.\d{1,2}$/.test(str)) {
+    str = str.replace(/,/g, '');
+  }
+  // Si solo tiene comas: 129484,32
+  else if (str.includes(',') && !str.includes('.')) {
+    str = str.replace(',', '.');
+  }
+  // Si solo tiene puntos de miles (sin decimales): 129.484
+  else if (/^\d{1,3}(\.\d{3})+$/.test(str)) {
+    str = str.replace(/\./g, '');
+  }
+
+  const num = parseFloat(str);
+  return isNaN(num) ? 0 : Math.round((num + Number.EPSILON) * 100) / 100;
+}
+

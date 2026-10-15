@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseExpense, splitInstallments } from './parseExpense';
+import { parseExpense, splitInstallments, parseExcelAmount } from './parseExpense';
 
 describe('parseExpense', () => {
   it.each([
@@ -31,5 +31,27 @@ describe('splitInstallments', () => {
   it('ajusta redondeo en la última cuota', () => {
     expect(splitInstallments(100000, 3)).toEqual({ cuota: 33333.33, ultima: 33333.34 });
     expect(splitInstallments(90000, 5)).toEqual({ cuota: 18000, ultima: 18000 });
+  });
+});
+
+describe('parseExcelAmount', () => {
+  it('parsea números directos de Excel', () => {
+    expect(parseExcelAmount(129484.32)).toBe(129484.32);
+    expect(parseExcelAmount(45000)).toBe(45000);
+  });
+
+  it('parsea strings con coma decimal argentina', () => {
+    expect(parseExcelAmount('129484,32')).toBe(129484.32);
+    expect(parseExcelAmount('129.484,32')).toBe(129484.32);
+    expect(parseExcelAmount('$ 129.484,32')).toBe(129484.32);
+  });
+
+  it('parsea strings con punto decimal anglosajón', () => {
+    expect(parseExcelAmount('129484.32')).toBe(129484.32);
+    expect(parseExcelAmount('129,484.32')).toBe(129484.32);
+  });
+
+  it('parsea enteros con separador de miles', () => {
+    expect(parseExcelAmount('129.484')).toBe(129484);
   });
 });
