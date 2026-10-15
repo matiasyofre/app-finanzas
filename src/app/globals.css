@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { color-scheme: dark; }
+  body {
+    @apply min-h-dvh bg-spruce-900 bg-app-gradient bg-fixed text-pebble antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply rounded-3xl border border-white/10 bg-white/[0.06] shadow-glass backdrop-blur-xl;
+  }
+  .glass-strong {
+    @apply rounded-3xl border border-white/10 bg-spruce-800/70 shadow-glass backdrop-blur-2xl;
+  }
+  .label { @apply text-xs font-medium uppercase tracking-[0.14em] text-jade; }
+  .btn-primary {
+    @apply rounded-2xl bg-gradient-to-br from-teal to-cyan/80 px-5 py-3 font-semibold text-spruce-900
+           shadow-glow transition active:scale-[.97] disabled:opacity-40 disabled:shadow-none;
+  }
+  .key {
+    @apply flex h-14 items-center justify-center rounded-2xl bg-white/5 text-2xl font-medium text-pebble
+           transition hover:bg-white/10 active:scale-95 active:bg-white/15;
+  }
+}
+
+.num { font-variant-numeric: tabular-nums; }
