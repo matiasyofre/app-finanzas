@@ -16,11 +16,15 @@ type Tab = 'categorias' | 'tarjetas';
 
 export default function AjustesManager() {
   const [tab, setTab] = useState<Tab>('categorias');
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const { categorias, cuentas } = useCatalogs();
 
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get('tab');
     if (t === 'tarjetas' || t === 'categorias') setTab(t);
+    getSupabase().auth.getUser().then(({ data }) => {
+      setUserEmail(data.user?.email ?? null);
+    });
   }, []);
 
   return (
@@ -38,6 +42,25 @@ export default function AjustesManager() {
         ))}
       </div>
       {tab === 'categorias' ? <Categorias items={categorias} /> : <Tarjetas items={cuentas} />}
+
+      <section className="glass animate-rise p-4">
+        <h2 className="label mb-2">Cuenta</h2>
+        <div className="flex items-center justify-between gap-3">
+          <div className="truncate text-sm">
+            <span className="block text-xs text-jade">Sesión iniciada como</span>
+            <span className="font-medium text-pebble">{userEmail ?? 'Cargando...'}</span>
+          </div>
+          <button
+            onClick={async () => {
+              await getSupabase().auth.signOut();
+              window.location.reload();
+            }}
+            className="rounded-xl border border-debt/40 bg-debt/10 px-3.5 py-2 text-xs font-medium text-debt transition hover:bg-debt/20"
+          >
+            Cerrar sesión
+          </button>
+        </div>
+      </section>
     </>
   );
 }
