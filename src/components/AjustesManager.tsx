@@ -192,23 +192,31 @@ function Tarjetas({ items }: { items: Cuenta[] }) {
     };
     const sb = getSupabase();
     try {
-      const { error } = draft.id
+      let res = draft.id
         ? await sb.from('cuentas_tarjetas').update(payload).eq('id', draft.id)
         : await sb.from('cuentas_tarjetas').insert(payload);
-      if (error) {
-        if (error.message.includes('saldo_inicial')) {
-          delete payload.saldo_inicial;
-          const retry = draft.id
+
+      if (res.error && (res.error.message?.includes('tipo_cuenta') || (res.error as any).code === '22P02')) {
+        if (payload.tipo === 'banco') {
+          payload.tipo = 'debito';
+          res = draft.id
             ? await sb.from('cuentas_tarjetas').update(payload).eq('id', draft.id)
             : await sb.from('cuentas_tarjetas').insert(payload);
-          if (retry.error) return setErr(retry.error.message);
-        } else {
-          return setErr(error.message);
         }
       }
+
+      if (res.error && (res.error.message?.includes('saldo_inicial') || (res.error as any).code === '42703')) {
+        delete payload.saldo_inicial;
+        res = draft.id
+          ? await sb.from('cuentas_tarjetas').update(payload).eq('id', draft.id)
+          : await sb.from('cuentas_tarjetas').insert(payload);
+      }
+
+      if (res.error) return setErr(res.error.message);
+
       notifyCatalogs(); notifyChange(); setDraft(null);
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : 'Error al guardar');
+    } catch (e: any) {
+      setErr(e?.message || 'Error al guardar');
     }
   };
 

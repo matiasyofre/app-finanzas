@@ -200,9 +200,8 @@ export default function CuentasManager() {
     try {
       const userRes = await sb.auth.getUser();
       const user = userRes.data?.user;
-      if (!user) throw new Error('No se encontró sesión de usuario activa.');
 
-      const payload = {
+      const basePayload: Record<string, any> = {
         nombre: draft.nombre.trim(),
         tipo: draft.tipo,
         saldo_inicial: Number(draft.saldo_inicial) || 0,
@@ -211,19 +210,41 @@ export default function CuentasManager() {
         activa: draft.activa,
       };
 
-      let ctaId = draft.id;
-      if (draft.id) {
-        const { error } = await sb.from('cuentas_tarjetas').update(payload).eq('id', draft.id);
-        if (error) throw error;
-      } else {
-        const { data: newCta, error } = await sb
-          .from('cuentas_tarjetas')
-          .insert({ ...payload, usuario_id: user.id })
-          .select('id')
-          .single();
-        if (error) throw error;
-        ctaId = newCta?.id;
+      if (user?.id) {
+        basePayload.usuario_id = user.id;
       }
+
+      const executeSave = async (data: Record<string, any>) => {
+        if (draft.id) {
+          const { usuario_id, ...updateData } = data;
+          return await sb.from('cuentas_tarjetas').update(updateData).eq('id', draft.id).select('id').single();
+        } else {
+          return await sb.from('cuentas_tarjetas').insert(data).select('id').single();
+        }
+      };
+
+      let savePayload = { ...basePayload };
+      let res = await executeSave(savePayload);
+
+      // Si Postgres rechaza 'banco' porque el enum original de la BD aún no lo incluye:
+      if (res.error && (res.error.message?.includes('tipo_cuenta') || res.error.code === '22P02')) {
+        if (savePayload.tipo === 'banco') {
+          savePayload.tipo = 'debito';
+          res = await executeSave(savePayload);
+        }
+      }
+
+      // Si la columna saldo_inicial no existe aún en Postgres:
+      if (res.error && (res.error.message?.includes('saldo_inicial') || res.error.code === '42703')) {
+        delete savePayload.saldo_inicial;
+        res = await executeSave(savePayload);
+      }
+
+      if (res.error) {
+        throw new Error(res.error.message || 'Error al guardar');
+      }
+
+      const ctaId = res.data?.id || draft.id;
 
       // Si es un préstamo, guardar/actualizar su transacción con cuotas y cronograma
       if (esPrestamo && ctaId) {
@@ -241,8 +262,7 @@ export default function CuentasManager() {
           .limit(1)
           .maybeSingle();
 
-        const txPayload = {
-          usuario_id: user.id,
+        const txPayload: Record<string, any> = {
           cuenta_id: ctaId,
           descripcion: draft.nombre.trim(),
           tipo: 'egreso' as const,
@@ -257,10 +277,16 @@ export default function CuentasManager() {
           pagado_por: 'yo' as const,
         };
 
+        if (user?.id) {
+          txPayload.usuario_id = user.id;
+        }
+
         if (existingTx?.id) {
-          await sb.from('transacciones').update(txPayload).eq('id', existingTx.id);
+          const { error: txErr } = await sb.from('transacciones').update(txPayload).eq('id', existingTx.id);
+          if (txErr) console.warn('Error al actualizar transacción de préstamo:', txErr);
         } else {
-          await sb.from('transacciones').insert(txPayload);
+          const { error: txErr } = await sb.from('transacciones').insert(txPayload);
+          if (txErr) console.warn('Error al insertar transacción de préstamo:', txErr);
         }
       }
 
@@ -268,8 +294,10 @@ export default function CuentasManager() {
       notifyChange();
       setDraft(null);
       loadData();
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : 'Error al guardar');
+    } catch (e: any) {
+      console.error(e);
+      const msg = e?.message || (typeof e === 'string' ? e : 'Error al guardar');
+      setErr(msg);
     }
   };
 
