@@ -299,6 +299,71 @@ export default function ExcelManager() {
         }
       }
 
+      // Normalizador y mapa de sinónimos para categorías
+      const normalize = (s: string) =>
+        s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+      const ALIASES: Record<string, string> = {
+        casa: 'hogar',
+        vivienda: 'hogar',
+        inmueble: 'hogar',
+        otro: 'otros',
+        super: 'supermercado',
+        comida: 'supermercado',
+        alimentos: 'supermercado',
+        coche: 'auto',
+        vehiculo: 'auto',
+        nafta: 'auto',
+        telefono: 'telefonia',
+        movil: 'telefonia',
+        internet: 'telefonia',
+      };
+
+      const findCatId = (raw: string): string | null => {
+        const norm = normalize(raw);
+        const direct = categorias.find((c) => normalize(c.nombre) === norm);
+        if (direct) return direct.id;
+
+        const alt = norm.endsWith('s') ? norm.slice(0, -1) : norm + 's';
+        const matchAlt = categorias.find((c) => normalize(c.nombre) === alt);
+        if (matchAlt) return matchAlt.id;
+
+        const alias = ALIASES[norm] || ALIASES[alt];
+        if (alias) {
+          const matchAlias = categorias.find((c) => normalize(c.nombre) === alias);
+          if (matchAlias) return matchAlias.id;
+        }
+        return null;
+      };
+
+      // Auto-crear categorías si aún no existen
+      const catCache = new Map<string, string>();
+      for (const row of validRows) {
+        if (row.categoria_nombre) {
+          const norm = normalize(row.categoria_nombre);
+          let matchedId = findCatId(row.categoria_nombre) || catCache.get(norm);
+          if (!matchedId) {
+            const { data: newCat } = await sb
+              .from('categorias')
+              .insert({
+                usuario_id: user.id,
+                nombre: row.categoria_nombre.trim(),
+                tipo: row.tipo,
+                icono: '🏷️',
+                color: '#7A8B8F',
+              })
+              .select('id')
+              .single();
+            if (newCat?.id) {
+              matchedId = newCat.id;
+              catCache.set(norm, newCat.id);
+            }
+          } else {
+            catCache.set(norm, matchedId);
+          }
+        }
+      }
+
       const payload: NuevaTransaccion[] = validRows.map((row) => {
         let cuenta_id: string | null = null;
         if (row.cuenta_nombre) {
@@ -307,10 +372,7 @@ export default function ExcelManager() {
 
         let categoria_id: string | null = null;
         if (row.categoria_nombre) {
-          const matchCat = categorias.find(
-            (c) => c.nombre.toLowerCase().trim() === row.categoria_nombre?.toLowerCase().trim(),
-          );
-          if (matchCat) categoria_id = matchCat.id;
+          categoria_id = catCache.get(normalize(row.categoria_nombre)) || findCatId(row.categoria_nombre) || null;
         }
 
         return {

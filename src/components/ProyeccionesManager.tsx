@@ -15,6 +15,7 @@ import { getSupabase, type ProyeccionDesglosada } from '@/lib/supabase/client';
 import { TX_EVENT } from '@/lib/offlineQueue';
 import { compact, money, monthLabel } from '@/lib/format';
 import { addMonths, todayISO } from '@/lib/cuotas';
+import { useCatalogs, cuentaIcon } from '@/lib/catalogs';
 import WaterfallChart from './WaterfallChart';
 
 type Tab = 'consolidado' | 'tarjetas' | 'prestamos' | 'ingresos';
@@ -52,7 +53,9 @@ type CuotaCustom = {
 };
 
 export default function ProyeccionesManager() {
+  const { cuentas } = useCatalogs();
   const [tab, setTab] = useState<Tab>('consolidado');
+  const [selectedCuenta, setSelectedCuenta] = useState<string>('todas');
   const [data, setData] = useState<ProyeccionDesglosada[] | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -100,6 +103,8 @@ export default function ProyeccionesManager() {
 
       // 2. Procesar cada transacción y proyectarla
       for (const tx of transacciones) {
+        if (selectedCuenta !== 'todas' && tx.cuenta_id !== selectedCuenta) continue;
+
         const montoTotal = Number(tx.monto_total) || 0;
         const cuotasTotales = Math.max(1, Number(tx.cuotas_totales) || 1);
         const cuotaActual = Math.max(1, Math.min(cuotasTotales, Number(tx.cuota_actual) || 1));
@@ -192,7 +197,7 @@ export default function ProyeccionesManager() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedCuenta]);
 
   useEffect(() => {
     load();
@@ -245,27 +250,43 @@ export default function ProyeccionesManager() {
 
   return (
     <div className="space-y-6">
-      {/* Selector de pestañas de Proyección */}
-      <div className="glass flex flex-wrap gap-1 p-1">
-        {(
-          [
-            ['consolidado', '📊 Consolidado'],
-            ['tarjetas', '💳 Cuotas Tarjetas'],
-            ['prestamos', '📄 Préstamos'],
-            ['ingresos', '💼 Ingresos'],
-          ] as [Tab, string][]
-        ).map(([k, label]) => (
-          <button
-            key={k}
-            id={`tab-proy-${k}`}
-            onClick={() => setTab(k)}
-            className={`flex-1 min-w-[120px] rounded-2xl py-2.5 px-3 text-xs md:text-sm font-semibold transition ${
-              tab === k ? 'bg-teal text-pebble shadow-glow' : 'text-jade hover:bg-white/5 hover:text-pebble'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+      {/* Barra superior: Pestañas de Proyección + Filtro de Cuenta */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="glass flex flex-1 flex-wrap gap-1 p-1">
+          {(
+            [
+              ['consolidado', '📊 Consolidado'],
+              ['tarjetas', '💳 Cuotas Tarjetas'],
+              ['prestamos', '📄 Préstamos'],
+              ['ingresos', '💼 Ingresos'],
+            ] as [Tab, string][]
+          ).map(([k, label]) => (
+            <button
+              key={k}
+              id={`tab-proy-${k}`}
+              onClick={() => setTab(k)}
+              className={`flex-1 min-w-[120px] rounded-2xl py-2.5 px-3 text-xs md:text-sm font-semibold transition ${
+                tab === k ? 'bg-teal text-pebble shadow-glow' : 'text-jade hover:bg-white/5 hover:text-pebble'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <select
+          value={selectedCuenta}
+          onChange={(e) => setSelectedCuenta(e.target.value)}
+          aria-label="Filtrar proyección por cuenta"
+          className="rounded-2xl border border-white/10 bg-spruce-900/90 px-3.5 py-2.5 text-xs font-semibold text-pebble focus:outline-none focus:ring-1 focus:ring-teal shrink-0"
+        >
+          <option value="todas">💳 Todas las cuentas</option>
+          {cuentas.map((c) => (
+            <option key={c.id} value={c.id}>
+              {cuentaIcon(c.tipo)} {c.nombre}
+            </option>
+          ))}
+        </select>
       </div>
 
       {loading && !data && <div className="glass h-96 animate-pulse" />}

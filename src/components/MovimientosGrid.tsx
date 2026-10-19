@@ -4,12 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getSupabase } from '@/lib/supabase/client';
 import { notifyChange, TX_EVENT } from '@/lib/offlineQueue';
 import { cuentaIcon, useCatalogs } from '@/lib/catalogs';
-import { monthDiff, todayISO } from '@/lib/cuotas';
-import { money } from '@/lib/format';
+import { monthDiff, todayISO, addMonths } from '@/lib/cuotas';
+import { money, monthLabel } from '@/lib/format';
 import TransactionEditor, { type Transaccion } from './TransactionEditor';
 import ExcelManager from './ExcelManager';
 
-type Filtro = 'todos' | 'activos' | 'pendientes' | 'saldados' | 'fijo' | 'variable' | 'compartido' | 'egreso' | 'ingreso';
+type Filtro = 'todos' | 'activos' | 'pendientes' | 'saldados' | 'fijo' | 'variable' | 'compartido' | 'prestamos' | 'egreso' | 'ingreso';
 
 const fmtDate = (iso: string) =>
   new Date(iso + 'T12:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' });
@@ -27,8 +27,13 @@ export default function MovimientosGrid() {
   const [rows, setRows] = useState<Transaccion[] | null>(null);
   const [q, setQ] = useState('');
   const [filtro, setFiltro] = useState<Filtro>('todos');
+  const [periodo, setPeriodo] = useState<string>('vigentes');
+  const [selectedCuenta, setSelectedCuenta] = useState<string>('todas');
+  const [selectedCat, setSelectedCat] = useState<string>('todas');
   const [editing, setEditing] = useState<Transaccion | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const currentYM = todayISO().slice(0, 7);
 
   const load = useCallback(async () => {
     const { data, error } = await getSupabase()
@@ -36,7 +41,7 @@ export default function MovimientosGrid() {
       .select('id,tipo,naturaleza,porcentaje_propio,pagado_por,compartido_con,saldado,fecha_saldado,es_recurrente,descripcion,monto_total,monto_cuota,cuotas_totales,cuota_actual,fecha_compra,fecha_primera_cuota,categoria_id,cuenta_id')
       .order('fecha_compra', { ascending: false })
       .order('created_at', { ascending: false })
-      .limit(500);
+      .limit(1000);
     if (error) return setError(error.message);
     setRows(
       ((data ?? []) as Transaccion[]).map((r) => ({
@@ -81,36 +86,95 @@ export default function MovimientosGrid() {
     }
   };
 
+  // Lista de meses disponibles para el selector rápido (meses pasados y futuros cercanos)
+  const mesesOpciones = useMemo(() => {
+    const list = [];
+    for (let i = -3; i <= 3; i++) {
+      const ym = addMonths(currentYM, i);
+      list.push({ ym, label: monthLabel(`${ym}-01`, { month: 'long', year: 'numeric' }) });
+    }
+    return list;
+  }, [currentYM]);
+
   const visibles = useMemo(() => {
     const s = q.trim().toLowerCase();
     return (rows ?? []).filter((t) => {
+      const p = progreso(t);
+      const startYM = (t.fecha_primera_cuota || t.fecha_compra).slice(0, 7);
+      const esFijo = t.naturaleza === 'fijo' || Boolean(t.es_recurrente);
+      const cta = t.cuenta_id ? ctaMap.get(t.cuenta_id) : undefined;
+
+      // 1. Filtro de Período (Vigentes vs Histórico vs Mes específico)
+      if (periodo === 'vigentes') {
+        // En "Vigentes" quedan:
+        // - Gastos fijos (siguen activos siempre para actualizar por inflación)
+        // - Cuotas y préstamos que siguen activos o terminan este mes
+        // - Gastos de 1 pago del mes actual (o futuros)
+        if (!esFijo) {
+          if (t.cuotas_totales > 1) {
+            if (p.state === 'fin') return false; // ya terminaron en un mes pasado
+          } else {
+            if (startYM < currentYM) return false; // gastos de 1 pago pasados van a histórico
+          }
+        }
+      } else if (periodo === 'historico') {
+        // En "Histórico" están los gastos de 1 pago de meses pasados o cuotas ya finalizadas
+        if (esFijo) return false;
+        if (t.cuotas_totales > 1) {
+          if (p.state !== 'fin') return false;
+        } else {
+          if (startYM >= currentYM) return false;
+        }
+      } else if (periodo !== 'todos') {
+        // Mes específico (ej. "2026-10")
+        if (esFijo) {
+          if (startYM > periodo) return false;
+        } else if (t.cuotas_totales > 1) {
+          const diff = monthDiff(startYM, periodo);
+          const cuotaEnMes = t.cuota_actual + diff;
+          if (cuotaEnMes < t.cuota_actual || cuotaEnMes > t.cuotas_totales) return false;
+        } else {
+          if (startYM !== periodo) return false;
+        }
+      }
+
+      // 2. Filtro de Cuenta / Tarjeta
+      if (selectedCuenta !== 'todas' && t.cuenta_id !== selectedCuenta) return false;
+
+      // 3. Filtro de Categoría
+      if (selectedCat !== 'todas' && t.categoria_id !== selectedCat) return false;
+
+      // 4. Filtro por Naturaleza / Tipo / Estado
       if (filtro === 'egreso' || filtro === 'ingreso') {
         if (t.tipo !== filtro) return false;
       } else if (filtro === 'fijo') {
-        if (t.naturaleza !== 'fijo') return false;
+        if (!esFijo) return false;
       } else if (filtro === 'variable') {
-        if (t.naturaleza !== 'variable') return false;
+        if (t.naturaleza !== 'variable' && !(!esFijo && t.cuotas_totales === 1)) return false;
       } else if (filtro === 'compartido') {
         if (t.naturaleza !== 'compartido') return false;
+      } else if (filtro === 'prestamos') {
+        if (cta?.tipo !== 'prestamo') return false;
       } else if (filtro === 'activos') {
-        if (t.cuotas_totales === 1 || progreso(t).state === 'fin') return false;
+        if (t.cuotas_totales === 1 || p.state === 'fin') return false;
       } else if (filtro === 'pendientes') {
         if (t.saldado) return false;
       } else if (filtro === 'saldados') {
         if (!t.saldado) return false;
       }
 
+      // 5. Búsqueda por texto
       if (!s) return true;
       const cat = t.categoria_id ? catMap.get(t.categoria_id)?.nombre ?? '' : '';
-      const cta = t.cuenta_id ? ctaMap.get(t.cuenta_id)?.nombre ?? '' : '';
+      const ctaNom = cta?.nombre ?? '';
       const comp = t.compartido_con ?? '';
-      return `${t.descripcion} ${cat} ${cta} ${comp}`.toLowerCase().includes(s);
+      return `${t.descripcion} ${cat} ${ctaNom} ${comp}`.toLowerCase().includes(s);
     });
-  }, [rows, q, filtro, catMap, ctaMap]);
+  }, [rows, q, filtro, periodo, selectedCuenta, selectedCat, catMap, ctaMap, currentYM]);
 
-  // Totales calculados con el impacto real
+  // Totales calculados con el impacto real sobre lo visible
   const stats = useMemo(() => {
-    if (!rows) return { totalEgresos: 0, totalIngresos: 0, fijos: 0, compartidos: 0, pendientesCobro: 0, pendientesPago: 0 };
+    if (!visibles) return { totalEgresos: 0, totalIngresos: 0, fijos: 0, compartidos: 0, pendientesCobro: 0, pendientesPago: 0 };
     let totalEgresos = 0;
     let totalIngresos = 0;
     let fijos = 0;
@@ -118,7 +182,7 @@ export default function MovimientosGrid() {
     let pendientesCobro = 0;
     let pendientesPago = 0;
 
-    for (const t of rows) {
+    for (const t of visibles) {
       const partePropia = t.naturaleza === 'compartido' ? (t.monto_total * ((t.porcentaje_propio ?? 50) / 100)) : t.monto_total;
       if (t.tipo === 'ingreso') {
         totalIngresos += t.monto_total;
@@ -138,12 +202,7 @@ export default function MovimientosGrid() {
       }
     }
     return { totalEgresos, totalIngresos, fijos, compartidos, pendientesCobro, pendientesPago };
-  }, [rows]);
-
-  const totalVisibleReal = visibles.reduce((s, t) => {
-    const parte = t.naturaleza === 'compartido' ? (t.monto_total * ((t.porcentaje_propio ?? 50) / 100)) : t.monto_total;
-    return s + (t.tipo === 'egreso' ? -parte : t.monto_total);
-  }, 0);
+  }, [visibles]);
 
   if (error) return <div className="glass p-6 text-sm text-debt">{error}</div>;
 
@@ -162,31 +221,29 @@ export default function MovimientosGrid() {
           <p className="text-[11px] text-jade">total ingresado</p>
         </div>
         <div className="glass animate-rise p-4 [animation-delay:120ms]">
-          <p className="label text-[11px]">Te deben (Pendiente)</p>
-          <p className="num mt-1 text-2xl font-bold text-income">
-            {stats.pendientesCobro > 0 ? `+${money(stats.pendientesCobro)}` : '$0'}
-          </p>
+          <p className="label text-[11px]">Te deben (pendiente)</p>
+          <p className="num mt-1 text-2xl font-bold text-income">{money(stats.pendientesCobro)}</p>
           <p className="text-[11px] text-jade">por gastos que pagaste vos</p>
         </div>
         <div className="glass animate-rise p-4 [animation-delay:180ms]">
-          <p className="label text-[11px]">Debés (Pendiente)</p>
-          <p className="num mt-1 text-2xl font-bold text-debt">
-            {stats.pendientesPago > 0 ? `-${money(stats.pendientesPago)}` : '$0'}
-          </p>
+          <p className="label text-[11px]">Debés (pendiente)</p>
+          <p className="num mt-1 text-2xl font-bold text-debt">{money(stats.pendientesPago)}</p>
           <p className="text-[11px] text-jade">por gastos que pagó otro</p>
         </div>
       </div>
 
-      {/* Buscador y filtros de píldora con Importación/Plantilla Excel */}
-      <div className="glass animate-rise space-y-3 p-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center">
+      {/* Barra de Filtros Multifunción */}
+      <div className="glass animate-rise space-y-3 p-4 [animation-delay:120ms]">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          {/* Búsqueda */}
           <div className="relative flex-1">
+            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-jade">🔍</span>
             <input
-              id="mov-search"
+              type="text"
+              placeholder="Buscar por descripción, categoría, tarjeta o persona..."
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Buscar por descripción, categoría, tarjeta o compartido con…"
-              className="w-full rounded-2xl border border-white/10 bg-white/5 py-2.5 pl-4 pr-10 text-pebble placeholder:text-jade/60 outline-none focus:border-cyan/60"
+              className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 pl-9 pr-8 text-xs text-pebble placeholder-jade/60 focus:border-teal focus:outline-none"
             />
             {q && (
               <button
@@ -197,24 +254,75 @@ export default function MovimientosGrid() {
               </button>
             )}
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 md:justify-end">
+
+          {/* Menús desplegables de Cuenta, Categoría y Período */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Selector de Período */}
+            <select
+              value={periodo}
+              onChange={(e) => setPeriodo(e.target.value)}
+              className="rounded-xl border border-white/10 bg-spruce-900/90 px-3 py-2 text-xs font-medium text-pebble focus:outline-none focus:ring-1 focus:ring-teal"
+            >
+              <option value="vigentes">🌟 Vigentes (Mes actual + activos)</option>
+              <option value="historico">📁 Histórico (Pasados)</option>
+              <option value="todos">📋 Todo el historial</option>
+              <optgroup label="Ver mes puntual">
+                {mesesOpciones.map((m) => (
+                  <option key={m.ym} value={m.ym}>
+                    📅 {m.label}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+
+            {/* Selector de Cuenta / Tarjeta */}
+            <select
+              value={selectedCuenta}
+              onChange={(e) => setSelectedCuenta(e.target.value)}
+              className="rounded-xl border border-white/10 bg-spruce-900/90 px-3 py-2 text-xs font-medium text-pebble focus:outline-none focus:ring-1 focus:ring-teal"
+            >
+              <option value="todas">💳 Todas las cuentas</option>
+              {cuentas.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {cuentaIcon(c.tipo)} {c.nombre}
+                </option>
+              ))}
+            </select>
+
+            {/* Selector de Categoría */}
+            <select
+              value={selectedCat}
+              onChange={(e) => setSelectedCat(e.target.value)}
+              className="rounded-xl border border-white/10 bg-spruce-900/90 px-3 py-2 text-xs font-medium text-pebble focus:outline-none focus:ring-1 focus:ring-teal"
+            >
+              <option value="todas">🏷️ Todas las categorías</option>
+              {categorias.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.icono || '🏷️'} {c.nombre}
+                </option>
+              ))}
+            </select>
+
             <ExcelManager />
-            <span className="text-xs text-jade whitespace-nowrap">
+
+            <span className="text-xs text-jade whitespace-nowrap pl-1 font-medium">
               {visibles.length} de {rows?.length ?? 0}
             </span>
           </div>
         </div>
 
+        {/* Píldoras de tipo y estado */}
         <div className="no-scrollbar flex gap-2 overflow-x-auto pt-1">
           {(
             [
               ['todos', 'Todos'],
+              ['fijo', '📌 Fijos (Déb. Aut.)'],
+              ['variable', '⚡ Variables (Contado/QR)'],
+              ['activos', '💳 Cuotas activas'],
+              ['prestamos', '📄 Préstamos'],
+              ['compartido', '👥 Compartidos'],
               ['pendientes', '⏳ Pendientes'],
               ['saldados', '✓ Saldados'],
-              ['activos', 'Cuotas activas'],
-              ['fijo', '📌 Fijos'],
-              ['variable', '⚡ Variables'],
-              ['compartido', '👥 Compartidos'],
               ['egreso', 'Egresos'],
               ['ingreso', 'Ingresos'],
             ] as [Filtro, string][]
@@ -223,9 +331,9 @@ export default function MovimientosGrid() {
               key={k}
               id={`filtro-${k}`}
               onClick={() => setFiltro(k)}
-              className={`shrink-0 rounded-full px-3.5 py-1.5 text-xs font-medium transition md:text-sm ${
+              className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition ${
                 filtro === k
-                  ? 'bg-teal text-pebble shadow-glow font-semibold'
+                  ? 'bg-teal text-pebble shadow-glow font-bold'
                   : 'bg-white/5 text-jade hover:bg-white/10 hover:text-pebble'
               }`}
             >
@@ -280,162 +388,102 @@ export default function MovimientosGrid() {
                   <td className="num whitespace-nowrap px-5 py-3.5 text-xs text-jade">
                     {fmtDate(t.fecha_compra)}
                   </td>
-                  <td className="max-w-[220px] truncate px-4 py-3.5 font-medium text-pebble">
-                    {t.descripcion}
-                    {esComp && t.compartido_con && (
-                      <span className="ml-2 text-xs font-normal text-amber-300/80">
-                        (con {t.compartido_con})
-                      </span>
-                    )}
+                  <td className="px-4 py-3.5 font-medium text-pebble">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate">{t.descripcion}</span>
+                      {t.es_recurrente && (
+                        <span className="rounded bg-teal/20 px-1.5 py-0.5 text-[10px] font-semibold text-teal">
+                          Fijo
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3.5 text-xs">
+                    <span className="capitalize text-jade">
+                      {t.naturaleza === 'fijo' ? '📌 Fijo' : t.naturaleza === 'compartido' ? '👥 Compartido' : '⚡ Variable'}
+                    </span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3.5 text-xs">
-                    {t.naturaleza === 'fijo' ? (
-                      <span className="rounded-full bg-cyan/15 px-2.5 py-1 font-medium text-cyan">
-                        📌 Fijo
-                      </span>
-                    ) : esComp ? (
-                      <span className="rounded-full bg-amber-500/20 px-2.5 py-1 font-medium text-amber-300">
-                        👥 {t.porcentaje_propio ?? 50}%
-                      </span>
-                    ) : (
-                      <span className="rounded-full bg-white/5 px-2.5 py-1 text-jade">
-                        ⚡ Variable
-                      </span>
-                    )}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3.5">
                     {cat ? (
-                      <span
-                        className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs"
-                        style={{ background: `${cat.color}22`, color: cat.color }}
-                      >
-                        <span>{cat.icono}</span>
+                      <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-pebble" style={{ background: `${cat.color}22`, border: `1px solid ${cat.color}55` }}>
+                        <span>{cat.icono ?? '🏷️'}</span>
                         <span>{cat.nombre}</span>
                       </span>
                     ) : (
-                      <span className="text-xs text-jade/50">—</span>
+                      <span className="text-jade">—</span>
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3.5 text-xs text-pebble/80">
-                    {cta ? `${cuentaIcon(cta.tipo)} ${cta.nombre}` : <span className="text-jade/50">—</span>}
-                  </td>
-                  <td className="px-4 py-3.5 text-center">
-                    {t.cuotas_totales === 1 ? (
-                      <span className="text-xs text-jade">1x</span>
+                  <td className="whitespace-nowrap px-4 py-3.5 text-xs text-jade">
+                    {cta ? (
+                      <span className="inline-flex items-center gap-1">
+                        <span>{cuentaIcon(cta.tipo)}</span>
+                        <span>{cta.nombre}</span>
+                      </span>
                     ) : (
-                      <div className="mx-auto w-24">
-                        <span
-                          className={`num text-xs font-medium ${
-                            p.state === 'fin'
-                              ? 'text-income'
-                              : p.state === 'pend'
-                              ? 'text-cyan'
-                              : 'text-pebble'
-                          }`}
-                        >
-                          {p.label}
-                        </span>
-                        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/10">
-                          <div
-                            className="h-full rounded-full bg-cyan"
-                            style={{ width: `${(p.cur / t.cuotas_totales) * 100}%` }}
-                          />
-                        </div>
+                      '—'
+                    )}
+                  </td>
+                  <td className="px-4 py-3.5 text-center text-xs">
+                    <span
+                      className={`inline-block rounded-full px-2 py-0.5 font-medium ${
+                        p.state === 'act'
+                          ? 'bg-teal/20 text-teal'
+                          : p.state === 'pend'
+                          ? 'bg-white/10 text-jade'
+                          : 'bg-white/5 text-jade/60'
+                      }`}
+                    >
+                      {t.cuotas_totales > 1 ? p.label : '1 pago'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3.5 text-right">
+                    <span className={`num font-bold ${color}`}>
+                      {t.tipo === 'egreso' ? '-' : '+'}
+                      {money(miParte)}
+                    </span>
+                    {esComp && (
+                      <div className="num text-[10px] text-jade line-through">
+                        Total {money(t.monto_total)}
                       </div>
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3.5 text-right">
-                    <p className={`num font-semibold ${color}`}>
-                      {t.tipo === 'egreso' ? '-' : '+'}{money(t.monto_total)}
-                    </p>
-                    {esComp && !t.saldado && (
-                      <p className="num text-[11px] text-amber-300">
-                        {t.pagado_por === 'yo' ? (
-                          <span>Tu parte: {money(miParte)} · <strong className="text-income">Te deben {money(t.monto_total - miParte)}</strong></span>
-                        ) : (
-                          <span><strong className="text-debt">Debés: {money(miParte)}</strong></span>
-                        )}
-                      </p>
-                    )}
-                  </td>
-                  {/* ESTADO DE LIQUIDACIÓN Y BOTÓN RÁPIDO */}
-                  <td className="px-4 py-3.5 text-center whitespace-nowrap">
-                    {t.saldado ? (
+                  <td className="px-4 py-3.5 text-center">
+                    {esComp ? (
                       <button
-                        type="button"
                         onClick={(e) => toggleSaldadoRapido(t, e)}
-                        className="rounded-full bg-income/15 border border-income/30 px-2.5 py-1 text-xs font-medium text-income hover:bg-income/25 transition"
-                        title="Tocá para volver a marcar como pendiente"
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
+                          t.saldado
+                            ? 'bg-income/20 text-income hover:bg-income/30'
+                            : 'bg-debt/20 text-debt hover:bg-debt/30'
+                        }`}
+                        title="Tocá para cambiar estado"
                       >
-                        {esComp ? (t.pagado_por === 'yo' ? '✓ Cobrado' : '✓ Pagado') : '✓ Saldado'}
-                      </button>
-                    ) : esComp ? (
-                      <button
-                        type="button"
-                        onClick={(e) => toggleSaldadoRapido(t, e)}
-                        className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-xs text-jade hover:bg-white/15 hover:text-pebble transition"
-                        title={t.pagado_por === 'yo' ? 'Marcar como cobrado' : 'Marcar como pagado'}
-                      >
-                        {t.pagado_por === 'yo' ? 'Cobrar' : 'Pagar'}
+                        {t.saldado
+                          ? t.pagado_por === 'yo' ? '✓ Cobrado' : '✓ Pagado'
+                          : t.pagado_por === 'yo' ? '⏳ Por cobrar' : '⏳ Por pagar'}
                       </button>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={(e) => toggleSaldadoRapido(t, e)}
-                        className="rounded-full bg-white/5 px-2 py-0.5 text-xs text-jade/70 hover:bg-white/10"
-                      >
-                        Pendiente
-                      </button>
+                      <span className="text-xs text-jade">—</span>
                     )}
                   </td>
-                  <td className="px-3 py-3.5 text-center">
-                    <button
-                      type="button"
-                      aria-label="Editar"
-                      className="rounded-lg p-1.5 text-jade hover:bg-white/10 hover:text-cyan"
-                    >
-                      ✏️
-                    </button>
+                  <td className="px-3 py-3.5 text-center text-xs text-jade hover:text-pebble">
+                    ✎
                   </td>
                 </tr>
               );
             })}
-
-            {rows && !visibles.length && (
-              <tr>
-                <td colSpan={9} className="px-5 py-12 text-center text-jade">
-                  No se encontraron movimientos con los filtros seleccionados.
-                </td>
-              </tr>
-            )}
           </tbody>
-          {visibles.length > 0 && (
-            <tfoot>
-              <tr className="border-t border-white/10 bg-white/[0.02] text-sm">
-                <td colSpan={6} className="px-5 py-4 font-medium text-jade">
-                  Balance visible ({visibles.length} ítems):
-                </td>
-                <td
-                  className={`num px-4 py-4 text-right text-base font-bold ${
-                    totalVisibleReal < 0 ? 'text-debt' : 'text-income'
-                  }`}
-                >
-                  {money(totalVisibleReal)}
-                </td>
-                <td colSpan={2} />
-              </tr>
-            </tfoot>
-          )}
         </table>
+
+        {rows && !visibles.length && (
+          <div className="p-8 text-center text-xs text-jade">
+            No se encontraron movimientos con los filtros seleccionados.
+          </div>
+        )}
       </div>
 
-      {/* VISTA 2: LISTA DE TARJETAS TÁCTILES PARA CELULAR */}
-      <div className="space-y-2.5 md:hidden">
-        {!rows &&
-          Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="glass h-24 animate-pulse rounded-2xl" />
-          ))}
-
+      {/* VISTA 2: LISTA PARA MOBILE */}
+      <div className="space-y-2 md:hidden">
         {visibles.map((t) => {
           const cat = t.categoria_id ? catMap.get(t.categoria_id) : undefined;
           const cta = t.cuenta_id ? ctaMap.get(t.cuenta_id) : undefined;
@@ -445,97 +493,87 @@ export default function MovimientosGrid() {
           const miParte = esComp ? t.monto_total * ((t.porcentaje_propio ?? 50) / 100) : t.monto_total;
 
           return (
-            <article
+            <div
               key={t.id}
               onClick={() => setEditing(t)}
-              className={`glass relative cursor-pointer p-4 transition active:scale-[0.99] ${t.saldado ? 'opacity-70' : ''}`}
+              className="glass p-3.5 transition active:scale-[0.99]"
             >
-              <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="num text-xs text-jade">{fmtDate(t.fecha_compra)}</span>
+                  <div className="flex items-center gap-1.5">
+                    {cat && <span className="text-sm shrink-0">{cat.icono ?? '🏷️'}</span>}
+                    <p className="text-sm font-semibold text-pebble truncate">{t.descripcion}</p>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-jade">
+                    <span>{fmtDate(t.fecha_compra)}</span>
+                    {cta && (
+                      <span className="rounded bg-white/5 px-1.5 py-0.5">
+                        {cuentaIcon(cta.tipo)} {cta.nombre}
+                      </span>
+                    )}
+                    <span className="rounded bg-white/5 px-1.5 py-0.5">
+                      {t.cuotas_totales > 1 ? `Cuota ${p.label}` : '1 pago'}
+                    </span>
                     {t.naturaleza === 'fijo' && (
-                      <span className="rounded-full bg-cyan/15 px-2 py-0.5 text-[10px] font-semibold text-cyan">
-                        📌 Fijo
-                      </span>
-                    )}
-                    {esComp && (
-                      <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
-                        👥 {t.porcentaje_propio}%
-                      </span>
-                    )}
-                    {t.saldado && (
-                      <span className="rounded-full bg-income/20 px-2 py-0.5 text-[10px] font-bold text-income">
-                        {esComp ? (t.pagado_por === 'yo' ? '✓ Cobrado' : '✓ Pagado') : '✓ Saldado'}
+                      <span className="rounded bg-income/20 text-income px-1.5 py-0.5">
+                        Fijo
                       </span>
                     )}
                   </div>
-                  <h3 className="mt-1 truncate font-semibold text-pebble">{t.descripcion}</h3>
-                  {esComp && t.compartido_con && (
-                    <p className="text-xs text-amber-300/80">con {t.compartido_con}</p>
-                  )}
                 </div>
 
-                <div className="text-right">
-                  <p className={`num text-lg font-bold ${color}`}>
-                    {t.tipo === 'egreso' ? '-' : '+'}{money(t.monto_total)}
+                <div className="text-right shrink-0">
+                  <p className={`num font-bold text-sm ${color}`}>
+                    {t.tipo === 'egreso' ? '-' : '+'}
+                    {money(miParte)}
                   </p>
-                  {esComp && !t.saldado && (
-                    <p className="num text-[11px] text-amber-300">
-                      {t.pagado_por === 'yo' ? (
-                        <span>Tu parte: {money(miParte)} · <strong className="text-income">Te deben {money(t.monto_total - miParte)}</strong></span>
-                      ) : (
-                        <span><strong className="text-debt">Debés: {money(miParte)}</strong></span>
-                      )}
+                  {esComp && (
+                    <p className="num text-[10px] text-jade line-through">
+                      Total {money(t.monto_total)}
                     </p>
                   )}
                 </div>
               </div>
 
-              <div className="mt-3 flex items-center justify-between border-t border-white/5 pt-2 text-xs">
-                <div className="flex items-center gap-2">
-                  {cat && (
-                    <span
-                      className="rounded-full px-2 py-0.5"
-                      style={{ background: `${cat.color}22`, color: cat.color }}
-                    >
-                      {cat.icono} {cat.nombre}
-                    </span>
-                  )}
-                  {cta && <span className="text-jade">{cuentaIcon(cta.tipo)} {cta.nombre}</span>}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {t.cuotas_totales > 1 ? (
-                    <span className="num font-medium text-cyan">
-                      {p.label} · {money(t.monto_cuota)}/m
-                    </span>
-                  ) : (
-                    <span className="text-jade">1 pago</span>
-                  )}
+              {esComp && (
+                <div className="mt-2.5 flex items-center justify-between border-t border-white/5 pt-2 text-[11px]">
+                  <span className="text-jade">
+                    {t.porcentaje_propio}% propio {t.compartido_con ? `· ${t.compartido_con}` : ''}
+                  </span>
                   <button
-                    type="button"
                     onClick={(e) => toggleSaldadoRapido(t, e)}
-                    className={`rounded-lg px-2 py-1 text-[11px] font-medium transition ${
-                      t.saldado ? 'bg-income/20 text-income' : 'bg-white/10 text-jade hover:text-pebble'
+                    className={`rounded-full px-2 py-0.5 font-medium ${
+                      t.saldado ? 'bg-income/20 text-income' : 'bg-debt/20 text-debt'
                     }`}
                   >
-                    {t.saldado ? '✓ Listo' : 'Saldar'}
+                    {t.saldado
+                      ? t.pagado_por === 'yo' ? '✓ Cobrado' : '✓ Pagado'
+                      : t.pagado_por === 'yo' ? '⏳ Por cobrar' : '⏳ Por pagar'}
                   </button>
                 </div>
-              </div>
-            </article>
+              )}
+            </div>
           );
         })}
 
         {rows && !visibles.length && (
-          <div className="glass p-8 text-center text-sm text-jade">
-            No se encontraron movimientos con los filtros aplicados.
+          <div className="glass p-8 text-center text-xs text-jade">
+            No se encontraron movimientos con los filtros seleccionados.
           </div>
         )}
       </div>
 
-      <TransactionEditor tx={editing} categorias={categorias} cuentas={cuentas} onClose={() => setEditing(null)} />
+      {editing && (
+        <TransactionEditor
+          tx={editing}
+          categorias={categorias}
+          cuentas={cuentas}
+          onClose={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
     </div>
   );
 }

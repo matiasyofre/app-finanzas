@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bar, BarChart, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -62,7 +62,7 @@ export default function WaterfallChart() {
   return (
     <>
       <section className="glass animate-rise p-5" aria-labelledby="wf-title">
-        <h2 id="wf-title" className="label">VariaciÃ³n neta mensual de cuotas</h2>
+        <h2 id="wf-title" className="label">Variación neta mensual de cuotas</h2>
         <div className="mt-4 h-72">
           <ResponsiveContainer>
             <BarChart data={bars} margin={{ top: 8, right: 4, left: -12, bottom: 0 }}>
@@ -109,7 +109,7 @@ export default function WaterfallChart() {
 
       <div className="grid grid-cols-2 gap-3">
         <div className="glass animate-rise p-4 [animation-delay:100ms]">
-          <p className="label">LiberÃ¡s en 12m</p>
+          <p className="label">Liberás en 12m</p>
           <p className="num mt-1 text-2xl font-semibold text-income">{money(totalLiberado)}</p>
         </div>
         <div className="glass animate-rise p-4 [animation-delay:160ms]">

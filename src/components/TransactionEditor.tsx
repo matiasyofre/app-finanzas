@@ -18,6 +18,7 @@ export type Transaccion = {
   compartido_con?: string | null;
   saldado?: boolean;
   fecha_saldado?: string | null;
+  es_recurrente?: boolean;
   descripcion: string;
   monto_total: number;
   monto_cuota: number;
@@ -93,7 +94,7 @@ export default function TransactionEditor({
     if (tx) {
       setMontoStr(String(tx.monto_total).replace('.', ','));
       setMes(tx.fecha_primera_cuota.slice(0, 7));
-      if (tx.cuotas_totales > 1) {
+      if (tx.cuotas_totales > 1 || tx.naturaleza === 'fijo' || tx.es_recurrente) {
         loadCuotas(tx.id);
       }
     }
@@ -126,7 +127,7 @@ export default function TransactionEditor({
       return setErr(error.message);
     }
     notifyChange();
-    if (f.cuotas_totales > 1) {
+    if (f.cuotas_totales > 1 || f.naturaleza === 'fijo' || f.es_recurrente) {
       loadCuotas(f.id);
     }
   };
@@ -199,7 +200,8 @@ export default function TransactionEditor({
       });
 
       if (rpcErr) {
-        const hasta = aplicarAFuturas ? f.cuotas_totales : editandoCuota.nro;
+        const maxCuotas = f.naturaleza === 'fijo' || f.es_recurrente ? 24 : f.cuotas_totales;
+        const hasta = aplicarAFuturas ? maxCuotas : editandoCuota.nro;
         const inserts = [];
         for (let c = editandoCuota.nro; c <= hasta; c++) {
           inserts.push({
@@ -423,20 +425,28 @@ export default function TransactionEditor({
           </select>
         </label>
 
-        {/* CRONOGRAMA DE CUOTAS Y AJUSTE POR INFLACIÓN */}
-        {f.cuotas_totales > 1 && (
+        {/* CRONOGRAMA DE CUOTAS Y AJUSTE POR INFLACIÓN / TARIFA */}
+        {(f.cuotas_totales > 1 || f.naturaleza === 'fijo' || f.es_recurrente) && (
           <div className="rounded-2xl border border-cyan/20 bg-cyan/5 p-3">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs font-semibold text-pebble">Ajuste de cuotas por inflación / tasa</p>
-                <p className="text-[11px] text-jade">Permite cambiar el importe futuro sin alterar meses pasados</p>
+                <p className="text-xs font-semibold text-pebble">
+                  {f.naturaleza === 'fijo' || f.es_recurrente
+                    ? 'Ajuste mensual por inflación / tarifa'
+                    : 'Ajuste de cuotas por inflación / tasa'}
+                </p>
+                <p className="text-[11px] text-jade">
+                  {f.naturaleza === 'fijo' || f.es_recurrente
+                    ? 'Podés variar el importe de un mes sin alterar los meses anteriores'
+                    : 'Permite cambiar el importe futuro sin alterar meses pasados'}
+                </p>
               </div>
               <button
                 type="button"
                 onClick={() => setMostrarCuotas(!mostrarCuotas)}
                 className="rounded-lg bg-white/10 px-2.5 py-1 text-xs font-medium text-cyan hover:bg-white/15"
               >
-                {mostrarCuotas ? 'Ocultar' : 'Ver cuotas'}
+                {mostrarCuotas ? 'Ocultar' : f.naturaleza === 'fijo' || f.es_recurrente ? 'Ver meses' : 'Ver cuotas'}
               </button>
             </div>
 
