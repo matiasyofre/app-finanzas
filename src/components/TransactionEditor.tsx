@@ -157,14 +157,16 @@ export default function TransactionEditor({
   const save = async () => {
     if (!f.descripcion.trim() || !(total > 0) || f.cuotas_totales < 1) return setErr('Revisá descripción, monto y cuotas.');
     setBusy(true);
+    const esFijo = f.naturaleza === 'fijo' || Boolean(f.es_recurrente);
     const { error } = await getSupabase()
       .from('transacciones')
       .update({
         tipo: f.tipo,
-        naturaleza: f.naturaleza ?? 'variable',
-        porcentaje_propio: f.naturaleza === 'compartido' ? (f.porcentaje_propio ?? 50) : 100,
-        pagado_por: f.naturaleza === 'compartido' ? (f.pagado_por ?? 'yo') : 'yo',
-        compartido_con: f.naturaleza === 'compartido' ? (f.compartido_con?.trim() || null) : null,
+        naturaleza: esFijo ? 'fijo' : (esComp ? 'compartido' : 'variable'),
+        es_recurrente: esFijo,
+        porcentaje_propio: esComp ? (f.porcentaje_propio ?? 50) : 100,
+        pagado_por: esComp ? (f.pagado_por ?? 'yo') : 'yo',
+        compartido_con: esComp ? (f.compartido_con?.trim() || null) : null,
         saldado: f.saldado ?? false,
         descripcion: f.descripcion.trim(),
         monto_total: total,
@@ -230,7 +232,13 @@ export default function TransactionEditor({
   };
 
   const mesActualYM = todayISO().slice(0, 7);
-  const esComp = f.tipo === 'egreso' && f.naturaleza === 'compartido';
+  const esFijo = f.naturaleza === 'fijo' || Boolean(f.es_recurrente);
+  const esComp =
+    f.tipo === 'egreso' &&
+    (f.naturaleza === 'compartido' ||
+      (f.porcentaje_propio != null && f.porcentaje_propio < 100) ||
+      Boolean(f.compartido_con) ||
+      f.pagado_por === 'otro');
   const labelSaldado = esComp
     ? f.pagado_por === 'yo'
       ? f.saldado ? '✓ Ya cobraste tu parte' : '💰 Marcar como COBRADO'
@@ -274,33 +282,59 @@ export default function TransactionEditor({
           ))}
         </div>
 
-        {/* Clasificación Fijo / Variable / Compartido */}
+        {/* Clasificación independiente: Variable vs Fijo + Toggle Compartido */}
         {f.tipo === 'egreso' && (
-          <div className="flex gap-1.5 rounded-xl bg-white/5 p-1 text-xs">
-            {(
-              [
-                { id: 'variable', label: '⚡ Variable' },
-                { id: 'fijo', label: '📌 Fijo' },
-                { id: 'compartido', label: '👥 Compartido' },
-              ] as const
-            ).map((nat) => (
+          <div className="flex gap-2">
+            <div className="flex flex-1 gap-1 rounded-xl bg-white/5 p-1 text-xs">
               <button
-                key={nat.id}
                 type="button"
-                onClick={() => set('naturaleza', nat.id)}
+                onClick={() => {
+                  set('es_recurrente', false);
+                  set('naturaleza', esComp ? 'compartido' : 'variable');
+                }}
                 className={`flex-1 rounded-lg py-1.5 transition ${
-                  (f.naturaleza ?? 'variable') === nat.id
-                    ? nat.id === 'compartido'
-                      ? 'bg-amber-500/25 text-amber-300 font-semibold'
-                      : nat.id === 'fijo'
-                      ? 'bg-teal/40 text-cyan font-semibold'
-                      : 'bg-white/15 text-pebble font-semibold'
-                    : 'text-jade hover:text-pebble'
+                  !esFijo ? 'bg-white/15 text-pebble font-bold shadow-sm' : 'text-jade hover:text-pebble'
                 }`}
               >
-                {nat.label}
+                ⚡ Variable
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={() => {
+                  set('es_recurrente', true);
+                  set('naturaleza', 'fijo');
+                }}
+                className={`flex-1 rounded-lg py-1.5 transition ${
+                  esFijo ? 'bg-teal/40 text-cyan font-bold shadow-sm' : 'text-jade hover:text-pebble'
+                }`}
+              >
+                📌 Fijo
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (esComp) {
+                  set('porcentaje_propio', 100);
+                  set('compartido_con', null);
+                  set('pagado_por', 'yo');
+                  set('naturaleza', esFijo ? 'fijo' : 'variable');
+                } else {
+                  set('porcentaje_propio', 50);
+                  if (!esFijo) set('naturaleza', 'compartido');
+                }
+              }}
+              className={`flex items-center justify-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold transition border ${
+                esComp
+                  ? 'border-amber-400/50 bg-amber-500/20 text-amber-200 shadow-sm'
+                  : 'border-white/10 bg-white/5 text-jade hover:text-pebble'
+              }`}
+            >
+              <span>👥</span>
+              <span>Compartido</span>
+              {esComp && <span className="ml-0.5 text-amber-300">✓</span>}
+            </button>
           </div>
         )}
 

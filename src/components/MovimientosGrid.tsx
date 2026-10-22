@@ -22,10 +22,28 @@ function progreso(t: Transaccion) {
   return { label: `${cur}/${t.cuotas_totales}`, cur, state: 'act' as const };
 }
 
+export function isFijo(t: { naturaleza?: string; es_recurrente?: boolean }): boolean {
+  return t.naturaleza === 'fijo' || Boolean(t.es_recurrente);
+}
+
+export function isCompartido(t: {
+  naturaleza?: string;
+  porcentaje_propio?: number;
+  compartido_con?: string | null;
+  pagado_por?: string;
+}): boolean {
+  return (
+    t.naturaleza === 'compartido' ||
+    (t.porcentaje_propio != null && t.porcentaje_propio < 100) ||
+    Boolean(t.compartido_con?.trim()) ||
+    t.pagado_por === 'otro'
+  );
+}
+
 /** Devuelve el monto neto que impacta exclusivamente en un mes específico ("YYYY-MM"). */
 function getMontoMes(t: Transaccion, targetYM: string): number {
   const startYM = (t.fecha_primera_cuota || t.fecha_compra).slice(0, 7);
-  const esFijo = t.naturaleza === 'fijo' || Boolean(t.es_recurrente);
+  const esFijo = isFijo(t);
 
   if (esFijo) {
     if (startYM <= targetYM) {
@@ -138,7 +156,8 @@ export default function MovimientosGrid() {
     return (rows ?? []).filter((t) => {
       const p = progreso(t);
       const startYM = (t.fecha_primera_cuota || t.fecha_compra).slice(0, 7);
-      const esFijo = t.naturaleza === 'fijo' || Boolean(t.es_recurrente);
+      const esFijo = isFijo(t);
+      const esComp = isCompartido(t);
       const cta = t.cuenta_id ? ctaMap.get(t.cuenta_id) : undefined;
 
       // 1. Filtro de Período (Vigentes vs Histórico vs Mes específico)
@@ -187,9 +206,9 @@ export default function MovimientosGrid() {
       } else if (filtro === 'fijo') {
         if (!esFijo) return false;
       } else if (filtro === 'variable') {
-        if (t.naturaleza !== 'variable' && !(!esFijo && t.cuotas_totales === 1)) return false;
+        if (esFijo) return false;
       } else if (filtro === 'compartido') {
-        if (t.naturaleza !== 'compartido') return false;
+        if (!esComp) return false;
       } else if (filtro === 'prestamos') {
         if (cta?.tipo !== 'prestamo') return false;
       } else if (filtro === 'activos') {
@@ -236,18 +255,20 @@ export default function MovimientosGrid() {
     let pendientesPagoTotal = 0;
 
     for (const t of visibles) {
-      const partePropiaPct = (t.porcentaje_propio ?? (t.naturaleza === 'compartido' ? 50 : 100)) / 100;
+      const esComp = isCompartido(t);
+      const esFijo = isFijo(t);
+      const partePropiaPct = (t.porcentaje_propio ?? (esComp ? 50 : 100)) / 100;
 
       // 1. IMPACTO EN EL MES (Mes en curso o mes seleccionado)
       const montoMes = getMontoMes(t, mesReferencia);
       if (montoMes > 0) {
-        const partePropiaMes = t.naturaleza === 'compartido' ? (montoMes * partePropiaPct) : montoMes;
+        const partePropiaMes = esComp ? (montoMes * partePropiaPct) : montoMes;
         if (t.tipo === 'ingreso') {
           ingresosMes += montoMes;
         } else {
           egresosMes += partePropiaMes;
-          if (t.naturaleza === 'fijo' || t.es_recurrente) fijosMes += partePropiaMes;
-          if (t.naturaleza === 'compartido') {
+          if (esFijo) fijosMes += partePropiaMes;
+          if (esComp) {
             compartidosMes += partePropiaMes;
             if (!t.saldado) {
               if (t.pagado_por === 'yo') {
@@ -261,13 +282,13 @@ export default function MovimientosGrid() {
       }
 
       // 2. COMPROMISO TOTAL / HISTÓRICO (todas las cuotas y compromisos futuros)
-      const partePropiaTotal = t.naturaleza === 'compartido' ? (t.monto_total * partePropiaPct) : t.monto_total;
+      const partePropiaTotal = esComp ? (t.monto_total * partePropiaPct) : t.monto_total;
       if (t.tipo === 'ingreso') {
         totalIngresos += t.monto_total;
       } else {
         totalEgresos += partePropiaTotal;
-        if (t.naturaleza === 'fijo' || t.es_recurrente) fijosTotal += partePropiaTotal;
-        if (t.naturaleza === 'compartido') {
+        if (esFijo) fijosTotal += partePropiaTotal;
+        if (esComp) {
           compartidosTotal += partePropiaTotal;
           if (!t.saldado) {
             if (t.pagado_por === 'yo') {
@@ -517,7 +538,8 @@ export default function MovimientosGrid() {
                 const cta = t.cuenta_id ? ctaMap.get(t.cuenta_id) : undefined;
                 const p = progreso(t);
                 const color = t.tipo === 'ingreso' ? 'text-income' : 'text-debt';
-                const esComp = t.naturaleza === 'compartido';
+                const esComp = isCompartido(t);
+                const esFijo = isFijo(t);
                 const miParte = esComp ? t.monto_total * ((t.porcentaje_propio ?? 50) / 100) : t.monto_total;
 
                 return (
@@ -534,17 +556,26 @@ export default function MovimientosGrid() {
                     <td className="px-4 py-3.5 font-medium text-pebble">
                       <div className="flex max-w-[260px] items-center gap-2 lg:max-w-xs xl:max-w-md">
                         <span className="truncate" title={t.descripcion}>{t.descripcion}</span>
-                        {t.es_recurrente && (
-                          <span className="shrink-0 rounded bg-teal/20 px-1.5 py-0.5 text-[10px] font-semibold text-teal">
-                            Fijo
-                          </span>
-                        )}
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-3.5 text-xs">
-                      <span className="inline-flex items-center gap-1 capitalize text-jade">
-                        {t.naturaleza === 'fijo' ? '📌 Fijo' : t.naturaleza === 'compartido' ? '👥 Compartido' : '⚡ Variable'}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium ${
+                            esFijo ? 'bg-cyan/15 text-cyan' : 'bg-white/5 text-jade'
+                          }`}
+                        >
+                          {esFijo ? '📌 Fijo' : '⚡ Variable'}
+                        </span>
+                        {esComp && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-400"
+                            title={`Compartido al ${t.porcentaje_propio ?? 50}% ${t.compartido_con ? `con ${t.compartido_con}` : ''}`}
+                          >
+                            👥 {t.porcentaje_propio ?? 50}%
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-3.5 text-xs">
                       {cat ? (
@@ -642,7 +673,8 @@ export default function MovimientosGrid() {
           const cta = t.cuenta_id ? ctaMap.get(t.cuenta_id) : undefined;
           const p = progreso(t);
           const color = t.tipo === 'ingreso' ? 'text-income' : 'text-debt';
-          const esComp = t.naturaleza === 'compartido';
+          const esComp = isCompartido(t);
+          const esFijo = isFijo(t);
           const miParte = esComp ? t.monto_total * ((t.porcentaje_propio ?? 50) / 100) : t.monto_total;
 
           return (
@@ -667,9 +699,16 @@ export default function MovimientosGrid() {
                     <span className="rounded bg-white/5 px-1.5 py-0.5">
                       {t.cuotas_totales > 1 ? `Cuota ${p.label}` : '1 pago'}
                     </span>
-                    {t.naturaleza === 'fijo' && (
-                      <span className="rounded bg-income/20 text-income px-1.5 py-0.5">
-                        Fijo
+                    <span
+                      className={`rounded px-1.5 py-0.5 font-medium ${
+                        esFijo ? 'bg-cyan/15 text-cyan' : 'bg-white/5 text-jade'
+                      }`}
+                    >
+                      {esFijo ? '📌 Fijo' : '⚡ Variable'}
+                    </span>
+                    {esComp && (
+                      <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-400">
+                        👥 {t.porcentaje_propio ?? 50}%
                       </span>
                     )}
                   </div>

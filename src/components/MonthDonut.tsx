@@ -8,6 +8,7 @@ import { money } from '@/lib/format';
 import { useCatalogs, cuentaIcon } from '@/lib/catalogs';
 import { todayISO } from '@/lib/cuotas';
 import TransactionEditor, { type Transaccion } from './TransactionEditor';
+import { isFijo, isCompartido } from './MovimientosGrid';
 
 type MovimientoMes = {
   transaccion_id: string;
@@ -19,6 +20,7 @@ type MovimientoMes = {
   cuenta_nombre: string | null;
   cuenta_tipo: string | null;
   naturaleza: 'fijo' | 'variable' | 'compartido';
+  es_recurrente?: boolean;
   nro_cuota: number;
   cuotas_totales: number;
   porcentaje_propio: number;
@@ -57,6 +59,7 @@ export default function MonthDonut() {
           cuenta_nombre: r.cuenta_nombre,
           cuenta_tipo: r.cuenta_tipo,
           naturaleza: r.naturaleza || 'variable',
+          es_recurrente: Boolean(r.es_recurrente),
           nro_cuota: Number(r.nro_cuota || 1),
           cuotas_totales: Number(r.cuotas_totales || 1),
           porcentaje_propio: Number(r.porcentaje_propio ?? 100),
@@ -81,11 +84,14 @@ export default function MonthDonut() {
     if (!movimientos) return [];
     return movimientos.filter((m) => {
       if (selectedCuenta !== 'todas' && m.cuenta_id !== selectedCuenta) return false;
+      const esFijo = isFijo(m);
+      const esComp = isCompartido(m);
+
       if (selectedNaturaleza !== 'todas') {
-        if (selectedNaturaleza === 'fijo' && m.naturaleza !== 'fijo') return false;
-        if (selectedNaturaleza === 'variable' && m.naturaleza !== 'variable') return false;
+        if (selectedNaturaleza === 'fijo' && !esFijo) return false;
+        if (selectedNaturaleza === 'variable' && esFijo) return false;
         if (selectedNaturaleza === 'cuotas' && m.cuotas_totales <= 1) return false;
-        if (selectedNaturaleza === 'compartido' && m.naturaleza !== 'compartido') return false;
+        if (selectedNaturaleza === 'compartido' && !esComp) return false;
       }
       return true;
     });
@@ -297,6 +303,9 @@ export default function MonthDonut() {
         <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
           {detalleList.map((m, idx) => {
             const cat = m.categoria_id ? catMap.get(m.categoria_id) : null;
+            const esFijo = isFijo(m);
+            const esComp = isCompartido(m);
+
             return (
               <div
                 key={`${m.transaccion_id}-${idx}`}
@@ -319,14 +328,16 @@ export default function MonthDonut() {
                     <span className="rounded bg-white/5 px-1.5 py-0.5">
                       {m.cuotas_totales > 1 ? `Cuota ${m.nro_cuota}/${m.cuotas_totales}` : '1 pago'}
                     </span>
-                    {m.porcentaje_propio < 100 && (
-                      <span className="rounded bg-teal/20 text-teal px-1.5 py-0.5">
-                        {m.porcentaje_propio}% propio {m.compartido_con ? `· ${m.compartido_con}` : ''}
-                      </span>
-                    )}
-                    {m.naturaleza === 'fijo' && (
-                      <span className="rounded bg-income/20 text-income px-1.5 py-0.5">
-                        Fijo
+                    <span
+                      className={`rounded px-1.5 py-0.5 font-medium ${
+                        esFijo ? 'bg-cyan/15 text-cyan' : 'bg-white/5 text-jade'
+                      }`}
+                    >
+                      {esFijo ? '📌 Fijo' : '⚡ Variable'}
+                    </span>
+                    {esComp && (
+                      <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-400 font-medium">
+                        👥 {m.porcentaje_propio}% {m.compartido_con ? `· ${m.compartido_con}` : ''}
                       </span>
                     )}
                   </div>

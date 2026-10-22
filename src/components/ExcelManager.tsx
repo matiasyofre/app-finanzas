@@ -381,6 +381,7 @@ export default function ExcelManager() {
           cuotas_totales: row.cuotas_totales,
           tipo: row.tipo,
           naturaleza: row.naturaleza,
+          es_recurrente: row.naturaleza === 'fijo' || row.tipo === 'ingreso',
           porcentaje_propio: row.porcentaje_propio,
           pagado_por: row.pagado_por,
           compartido_con: row.compartido_con || null,

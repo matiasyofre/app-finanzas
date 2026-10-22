@@ -26,7 +26,8 @@ export default function QuickAddFab() {
   const [cuotas, setCuotas] = useState('1');
   const [descripcion, setDescripcion] = useState('');
   const [tipo, setTipo] = useState<'egreso' | 'ingreso'>('egreso');
-  const [naturaleza, setNaturaleza] = useState<NaturalezaGasto>('variable');
+  const [esFijo, setEsFijo] = useState(false);
+  const [esCompartido, setEsCompartido] = useState(false);
   const [porcentajePropio, setPorcentajePropio] = useState<number>(50);
   const [pagadoPor, setPagadoPor] = useState<PagadoPor>('yo');
   const [compartidoCon, setCompartidoCon] = useState<string>('');
@@ -65,7 +66,7 @@ export default function QuickAddFab() {
     setModoMonto('total');
     setDescripcion(p.descripcion);
     setTipo(p.tipo);
-    if (p.tipo === 'ingreso') setNaturaleza('fijo');
+    if (p.tipo === 'ingreso') setEsFijo(true);
     const match = categorias.find((c) => c.tipo === p.tipo && p.descripcion && p.descripcion.toLowerCase().includes(c.nombre.toLowerCase()));
     if (match) setCategoriaId(match.id);
   };
@@ -76,7 +77,6 @@ export default function QuickAddFab() {
   const split = useMemo(() => (total > 0 ? splitInstallments(total, n) : null), [total, n]);
   const valid = total > 0 && descripcion.trim().length > 0;
   const enCuotas = n > 1 && tipo === 'egreso';
-  const esCompartido = tipo === 'egreso' && naturaleza === 'compartido';
   const miMontoReal = esCompartido ? (total * (porcentajePropio / 100)) : total;
   const montoDiferencial = esCompartido ? (total * ((100 - porcentajePropio) / 100)) : 0;
 
@@ -128,7 +128,7 @@ export default function QuickAddFab() {
 
   const reset = () => {
     setText(''); setMonto(''); setCuotas('1'); setDescripcion(''); setTipo('egreso'); setField('monto');
-    setModoMonto('total'); setNaturaleza('variable'); setPorcentajePropio(50); setPagadoPor('yo'); setCompartidoCon('');
+    setModoMonto('total'); setEsFijo(false); setEsCompartido(false); setPorcentajePropio(50); setPagadoPor('yo'); setCompartidoCon('');
     setCategoriaId(null); setCuentaId(null); setMesManual(false);
   };
 
@@ -141,7 +141,8 @@ export default function QuickAddFab() {
         monto_total: total,
         cuotas_totales: n,
         tipo,
-        naturaleza: tipo === 'ingreso' ? 'fijo' : naturaleza,
+        naturaleza: tipo === 'ingreso' ? 'fijo' : (esFijo ? 'fijo' : (esCompartido ? 'compartido' : 'variable')),
+        es_recurrente: tipo === 'ingreso' ? true : esFijo,
         porcentaje_propio: esCompartido ? porcentajePropio : 100,
         pagado_por: esCompartido ? pagadoPor : 'yo',
         compartido_con: esCompartido ? (compartidoCon.trim() || null) : null,
@@ -189,7 +190,7 @@ export default function QuickAddFab() {
                   <button
                     key={t}
                     id={`tipo-${t}`}
-                    onClick={() => { setTipo(t); setCategoriaId(null); if (t === 'ingreso') setNaturaleza('fijo'); }}
+                    onClick={() => { setTipo(t); setCategoriaId(null); if (t === 'ingreso') setEsFijo(true); }}
                     className={`rounded-full px-3 py-1 capitalize transition ${
                       tipo === t ? (t === 'ingreso' ? 'bg-income/20 text-income font-medium' : 'bg-debt/20 text-debt font-medium') : 'text-jade'
                     }`}
@@ -200,33 +201,49 @@ export default function QuickAddFab() {
               </div>
             </div>
 
-            {/* Clasificación: Fijo / Variable / Compartido */}
+            {/* Clasificación: Variable vs Fijo + Toggle Compartido independiente */}
             {tipo === 'egreso' && (
-              <div className="mt-3 flex gap-1.5 rounded-2xl bg-white/5 p-1">
-                {(
-                  [
-                    { id: 'variable', label: '⚡ Variable', desc: 'Día a día' },
-                    { id: 'fijo', label: '📌 Fijo', desc: 'Recurrente' },
-                    { id: 'compartido', label: '👥 Compartido', desc: 'Dividido' },
-                  ] as const
-                ).map((nat) => (
+              <div className="mt-3 flex gap-2">
+                <div className="flex flex-1 gap-1 rounded-2xl bg-white/5 p-1">
                   <button
-                    key={nat.id}
+                    key="btn-variable"
                     type="button"
-                    onClick={() => setNaturaleza(nat.id)}
+                    onClick={() => setEsFijo(false)}
                     className={`flex-1 rounded-xl py-1.5 text-xs transition ${
-                      naturaleza === nat.id
-                        ? nat.id === 'compartido'
-                          ? 'bg-amber-500/20 text-amber-300 font-semibold shadow-sm'
-                          : nat.id === 'fijo'
-                          ? 'bg-teal/40 text-cyan font-semibold shadow-sm'
-                          : 'bg-white/15 text-pebble font-semibold shadow-sm'
+                      !esFijo
+                        ? 'bg-white/15 text-pebble font-semibold shadow-sm'
                         : 'text-jade hover:text-pebble'
                     }`}
                   >
-                    {nat.label}
+                    ⚡ Variable
                   </button>
-                ))}
+                  <button
+                    key="btn-fijo"
+                    type="button"
+                    onClick={() => setEsFijo(true)}
+                    className={`flex-1 rounded-xl py-1.5 text-xs transition ${
+                      esFijo
+                        ? 'bg-teal/40 text-cyan font-semibold shadow-sm'
+                        : 'text-jade hover:text-pebble'
+                    }`}
+                  >
+                    📌 Fijo
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setEsCompartido((c) => !c)}
+                  className={`flex items-center justify-center gap-1.5 rounded-2xl px-3.5 py-1.5 text-xs font-semibold transition border ${
+                    esCompartido
+                      ? 'border-amber-400/50 bg-amber-500/20 text-amber-200 shadow-sm'
+                      : 'border-white/10 bg-white/5 text-jade hover:text-pebble'
+                  }`}
+                >
+                  <span>👥</span>
+                  <span>Compartido</span>
+                  {esCompartido && <span className="ml-0.5 text-amber-300">✓</span>}
+                </button>
               </div>
             )}
 
