@@ -18,8 +18,9 @@ import { addMonths, todayISO } from '@/lib/cuotas';
 import { useCatalogs, cuentaIcon } from '@/lib/catalogs';
 import WaterfallChart from './WaterfallChart';
 import ExcelMatrixGrid from './ExcelMatrixGrid';
+import EscenariosSimulator from './EscenariosSimulator';
 
-type Tab = 'matriz' | 'consolidado' | 'tarjetas' | 'prestamos' | 'ingresos';
+type Tab = 'consolidado' | 'matriz' | 'escenarios' | 'tarjetas' | 'prestamos' | 'ingresos';
 
 const COLOR_INGRESOS = '#25D366'; // Verde WhatsApp
 const COLOR_TARJETAS = '#C98B6D'; // Terracota Clay
@@ -256,8 +257,9 @@ export default function ProyeccionesManager() {
         <div className="glass flex flex-1 flex-wrap gap-1 p-1">
           {(
             [
-              ['matriz', '📑 Matriz Excel (12m)'],
               ['consolidado', '📊 Consolidado'],
+              ['matriz', '📑 Matriz Excel (12m)'],
+              ['escenarios', '🔮 Escenarios ("What-If")'],
               ['tarjetas', '💳 Cuotas Tarjetas'],
               ['prestamos', '📄 Préstamos'],
               ['ingresos', '💼 Ingresos'],
@@ -276,7 +278,7 @@ export default function ProyeccionesManager() {
           ))}
         </div>
 
-        {tab !== 'matriz' && (
+        {tab !== 'matriz' && tab !== 'escenarios' && (
           <select
             value={selectedCuenta}
             onChange={(e) => setSelectedCuenta(e.target.value)}
@@ -296,7 +298,10 @@ export default function ProyeccionesManager() {
       {/* PESTAÑA 0: MATRIZ EXCEL */}
       {tab === 'matriz' && <ExcelMatrixGrid />}
 
-      {tab !== 'matriz' && loading && !data && <div className="glass h-96 animate-pulse" />}
+      {/* PESTAÑA: ESCENARIOS SIMULADOS */}
+      {tab === 'escenarios' && <EscenariosSimulator />}
+
+      {tab !== 'matriz' && tab !== 'escenarios' && loading && !data && <div className="glass h-96 animate-pulse" />}
 
       {/* PESTAÑA 1: CONSOLIDADO */}
       {tab === 'consolidado' && data && (

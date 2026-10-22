@@ -81,12 +81,15 @@ export default function MovimientosGrid() {
   const [editing, setEditing] = useState<Transaccion | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mostrarDeudaTotal, setMostrarDeudaTotal] = useState(false);
+  const [modoMontoGrid, setModoMontoGrid] = useState<'cuota' | 'total'>('cuota');
   const [vista, setVista] = useState<'lista' | 'matriz'>('lista');
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem('gastos:mostrar-deuda-total');
       if (saved === 'true') setMostrarDeudaTotal(true);
+      const savedModo = localStorage.getItem('gastos:modo-monto-grid');
+      if (savedModo === 'total' || savedModo === 'cuota') setModoMontoGrid(savedModo);
     } catch {}
   }, []);
 
@@ -360,20 +363,62 @@ export default function MovimientosGrid() {
         </div>
 
         {vista === 'lista' && (
-          <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-pebble transition hover:bg-white/10 select-none">
-            <input
-              type="checkbox"
-              checked={mostrarDeudaTotal}
-              onChange={(e) => {
-                setMostrarDeudaTotal(e.target.checked);
-                try {
-                  localStorage.setItem('gastos:mostrar-deuda-total', String(e.target.checked));
-                } catch {}
-              }}
-              className="h-4 w-4 rounded border-white/20 bg-white/10 text-teal accent-teal focus:ring-0 cursor-pointer"
-            />
-            <span className="font-medium">Sumar todas las cuotas futuras</span>
-          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Selector Cuota vs Monto Total */}
+            <div className="flex rounded-xl bg-white/5 p-1 text-xs border border-white/10 items-center">
+              <button
+                type="button"
+                id="btn-modo-monto-cuota"
+                onClick={() => {
+                  setModoMontoGrid('cuota');
+                  try {
+                    localStorage.setItem('gastos:modo-monto-grid', 'cuota');
+                  } catch {}
+                }}
+                className={`rounded-lg px-2.5 py-1 font-medium transition ${
+                  modoMontoGrid === 'cuota'
+                    ? 'bg-teal text-pebble shadow-sm font-bold'
+                    : 'text-jade hover:text-pebble'
+                }`}
+                title="Mostrar el valor mensual de la cuota en cada fila"
+              >
+                💳 Ver cuota
+              </button>
+              <button
+                type="button"
+                id="btn-modo-monto-total"
+                onClick={() => {
+                  setModoMontoGrid('total');
+                  try {
+                    localStorage.setItem('gastos:modo-monto-grid', 'total');
+                  } catch {}
+                }}
+                className={`rounded-lg px-2.5 py-1 font-medium transition ${
+                  modoMontoGrid === 'total'
+                    ? 'bg-teal text-pebble shadow-sm font-bold'
+                    : 'text-jade hover:text-pebble'
+                }`}
+                title="Mostrar el monto total de la compra / deuda"
+              >
+                💰 Ver total
+              </button>
+            </div>
+
+            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-pebble transition hover:bg-white/10 select-none">
+              <input
+                type="checkbox"
+                checked={mostrarDeudaTotal}
+                onChange={(e) => {
+                  setMostrarDeudaTotal(e.target.checked);
+                  try {
+                    localStorage.setItem('gastos:mostrar-deuda-total', String(e.target.checked));
+                  } catch {}
+                }}
+                className="h-4 w-4 rounded border-white/20 bg-white/10 text-teal accent-teal focus:ring-0 cursor-pointer"
+              />
+              <span className="font-medium">Sumar cuotas futuras</span>
+            </label>
+          </div>
         )}
       </div>
 
@@ -578,7 +623,12 @@ export default function MovimientosGrid() {
                 const color = t.tipo === 'ingreso' ? 'text-income' : 'text-debt';
                 const esComp = isCompartido(t);
                 const esFijo = isFijo(t);
-                const miParte = esComp ? t.monto_total * ((t.porcentaje_propio ?? 50) / 100) : t.monto_total;
+                const pctPropio = (t.porcentaje_propio ?? (esComp ? 50 : 100)) / 100;
+                const totalPropio = esComp ? t.monto_total * pctPropio : t.monto_total;
+                const esCuota = t.cuotas_totales > 1;
+                const cuotaNominal = t.monto_cuota || (esCuota ? t.monto_total / t.cuotas_totales : t.monto_total);
+                const cuotaPropia = esComp ? cuotaNominal * pctPropio : cuotaNominal;
+                const montoPrincipal = modoMontoGrid === 'cuota' && esCuota ? cuotaPropia : totalPropio;
 
                 return (
                   <tr
@@ -652,15 +702,33 @@ export default function MovimientosGrid() {
                       </span>
                     </td>
                     <td className="whitespace-nowrap px-2.5 py-2 text-right">
-                      <span className={`num font-bold text-xs md:text-sm tracking-tight ${color}`}>
-                        {t.tipo === 'egreso' ? '-' : '+'}
-                        {money(miParte)}
-                      </span>
-                      {esComp && (
-                        <div className="num text-[10px] text-jade line-through">
-                          Total {money(t.monto_total)}
+                      <div className="flex flex-col items-end">
+                        <div className="flex items-center justify-end gap-1">
+                          {modoMontoGrid === 'cuota' && esCuota && (
+                            <span className="text-[9.5px] rounded bg-teal/15 text-cyan px-1 py-0.2 font-semibold uppercase tracking-wider">
+                              cuota
+                            </span>
+                          )}
+                          <span className={`num font-bold text-xs md:text-sm tracking-tight ${color}`}>
+                            {t.tipo === 'egreso' ? '-' : '+'}
+                            {money(montoPrincipal)}
+                          </span>
                         </div>
-                      )}
+                        {esCuota && (
+                          <div className="num text-[10px] text-jade/70">
+                            {modoMontoGrid === 'cuota' ? (
+                              <span>Total {money(totalPropio)}</span>
+                            ) : (
+                              <span>{p.label}: {money(cuotaPropia)}</span>
+                            )}
+                          </div>
+                        )}
+                        {esComp && (
+                          <div className="num text-[9.5px] text-jade/50 line-through" title="Total sin dividir">
+                            100%: {money(t.monto_total)}
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-center">
                       {esComp ? (
@@ -713,7 +781,12 @@ export default function MovimientosGrid() {
           const color = t.tipo === 'ingreso' ? 'text-income' : 'text-debt';
           const esComp = isCompartido(t);
           const esFijo = isFijo(t);
-          const miParte = esComp ? t.monto_total * ((t.porcentaje_propio ?? 50) / 100) : t.monto_total;
+          const pctPropio = (t.porcentaje_propio ?? (esComp ? 50 : 100)) / 100;
+          const totalPropio = esComp ? t.monto_total * pctPropio : t.monto_total;
+          const esCuota = t.cuotas_totales > 1;
+          const cuotaNominal = t.monto_cuota || (esCuota ? t.monto_total / t.cuotas_totales : t.monto_total);
+          const cuotaPropia = esComp ? cuotaNominal * pctPropio : cuotaNominal;
+          const montoPrincipal = modoMontoGrid === 'cuota' && esCuota ? cuotaPropia : totalPropio;
 
           return (
             <div
@@ -753,13 +826,25 @@ export default function MovimientosGrid() {
                 </div>
 
                 <div className="text-right shrink-0">
-                  <p className={`num font-bold text-sm ${color}`}>
-                    {t.tipo === 'egreso' ? '-' : '+'}
-                    {money(miParte)}
-                  </p>
+                  <div className="flex items-center justify-end gap-1">
+                    {modoMontoGrid === 'cuota' && esCuota && (
+                      <span className="text-[9.5px] rounded bg-teal/15 text-cyan px-1 py-0.2 font-semibold uppercase tracking-wider">
+                        cuota
+                      </span>
+                    )}
+                    <p className={`num font-bold text-sm ${color}`}>
+                      {t.tipo === 'egreso' ? '-' : '+'}
+                      {money(montoPrincipal)}
+                    </p>
+                  </div>
+                  {esCuota && (
+                    <p className="num text-[10.5px] text-jade/70">
+                      {modoMontoGrid === 'cuota' ? `Total ${money(totalPropio)}` : `${p.label}: ${money(cuotaPropia)}`}
+                    </p>
+                  )}
                   {esComp && (
-                    <p className="num text-[10px] text-jade line-through">
-                      Total {money(t.monto_total)}
+                    <p className="num text-[9.5px] text-jade/50 line-through">
+                      100%: {money(t.monto_total)}
                     </p>
                   )}
                 </div>
