@@ -17,8 +17,9 @@ import { compact, money, monthLabel } from '@/lib/format';
 import { addMonths, todayISO } from '@/lib/cuotas';
 import { useCatalogs, cuentaIcon } from '@/lib/catalogs';
 import WaterfallChart from './WaterfallChart';
+import ExcelMatrixGrid from './ExcelMatrixGrid';
 
-type Tab = 'consolidado' | 'tarjetas' | 'prestamos' | 'ingresos';
+type Tab = 'matriz' | 'consolidado' | 'tarjetas' | 'prestamos' | 'ingresos';
 
 const COLOR_INGRESOS = '#25D366'; // Verde WhatsApp
 const COLOR_TARJETAS = '#C98B6D'; // Terracota Clay
@@ -255,6 +256,7 @@ export default function ProyeccionesManager() {
         <div className="glass flex flex-1 flex-wrap gap-1 p-1">
           {(
             [
+              ['matriz', '📑 Matriz Excel (12m)'],
               ['consolidado', '📊 Consolidado'],
               ['tarjetas', '💳 Cuotas Tarjetas'],
               ['prestamos', '📄 Préstamos'],
@@ -265,7 +267,7 @@ export default function ProyeccionesManager() {
               key={k}
               id={`tab-proy-${k}`}
               onClick={() => setTab(k)}
-              className={`flex-1 min-w-[120px] rounded-2xl py-2.5 px-3 text-xs md:text-sm font-semibold transition ${
+              className={`flex-1 min-w-[110px] rounded-2xl py-2.5 px-3 text-xs md:text-sm font-semibold transition ${
                 tab === k ? 'bg-teal text-pebble shadow-glow' : 'text-jade hover:bg-white/5 hover:text-pebble'
               }`}
             >
@@ -274,22 +276,27 @@ export default function ProyeccionesManager() {
           ))}
         </div>
 
-        <select
-          value={selectedCuenta}
-          onChange={(e) => setSelectedCuenta(e.target.value)}
-          aria-label="Filtrar proyección por cuenta"
-          className="rounded-2xl border border-white/10 bg-spruce-900/90 px-3.5 py-2.5 text-xs font-semibold text-pebble focus:outline-none focus:ring-1 focus:ring-teal shrink-0"
-        >
-          <option value="todas">💳 Todas las cuentas</option>
-          {cuentas.map((c) => (
-            <option key={c.id} value={c.id}>
-              {cuentaIcon(c.tipo)} {c.nombre}
-            </option>
-          ))}
-        </select>
+        {tab !== 'matriz' && (
+          <select
+            value={selectedCuenta}
+            onChange={(e) => setSelectedCuenta(e.target.value)}
+            aria-label="Filtrar proyección por cuenta"
+            className="rounded-2xl border border-white/10 bg-spruce-900/90 px-3.5 py-2.5 text-xs font-semibold text-pebble focus:outline-none focus:ring-1 focus:ring-teal shrink-0"
+          >
+            <option value="todas">💳 Todas las cuentas</option>
+            {cuentas.map((c) => (
+              <option key={c.id} value={c.id}>
+                {cuentaIcon(c.tipo)} {c.nombre}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
-      {loading && !data && <div className="glass h-96 animate-pulse" />}
+      {/* PESTAÑA 0: MATRIZ EXCEL */}
+      {tab === 'matriz' && <ExcelMatrixGrid />}
+
+      {tab !== 'matriz' && loading && !data && <div className="glass h-96 animate-pulse" />}
 
       {/* PESTAÑA 1: CONSOLIDADO */}
       {tab === 'consolidado' && data && (

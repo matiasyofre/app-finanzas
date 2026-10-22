@@ -8,6 +8,7 @@ import { monthDiff, todayISO, addMonths } from '@/lib/cuotas';
 import { money, monthLabel } from '@/lib/format';
 import TransactionEditor, { type Transaccion } from './TransactionEditor';
 import ExcelManager from './ExcelManager';
+import ExcelMatrixGrid from './ExcelMatrixGrid';
 
 type Filtro = 'todos' | 'activos' | 'pendientes' | 'saldados' | 'fijo' | 'variable' | 'compartido' | 'prestamos' | 'egreso' | 'ingreso';
 
@@ -80,6 +81,7 @@ export default function MovimientosGrid() {
   const [editing, setEditing] = useState<Transaccion | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mostrarDeudaTotal, setMostrarDeudaTotal] = useState(false);
+  const [vista, setVista] = useState<'lista' | 'matriz'>('lista');
 
   useEffect(() => {
     try {
@@ -326,30 +328,66 @@ export default function MovimientosGrid() {
 
   return (
     <div className="space-y-5">
-      {/* Encabezado del Resumen con Tilde para Activar/Desactivar Deuda Total */}
+      {/* Selector Principal de Vista: Lista de Movimientos vs Planilla Matriz Excel */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <p className="label text-[11px]">Resumen de movimientos</p>
-          <span className="rounded-full bg-teal/15 px-2.5 py-0.5 text-[11px] font-semibold text-cyan">
-            📅 {stats.mesReferencia === currentYM ? 'Mes actual' : 'Mes seleccionado'}: {monthLabel(stats.mesReferencia + '-01', { month: 'long', year: 'numeric' })}
-          </span>
+        <div className="flex rounded-2xl bg-white/5 p-1 border border-white/10">
+          <button
+            type="button"
+            id="btn-vista-lista"
+            onClick={() => setVista('lista')}
+            className={`flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold transition ${
+              vista === 'lista'
+                ? 'bg-teal text-pebble shadow-sm'
+                : 'text-jade hover:text-pebble'
+            }`}
+          >
+            <span>📋</span>
+            <span>Tabla de Movimientos</span>
+          </button>
+          <button
+            type="button"
+            id="btn-vista-matriz"
+            onClick={() => setVista('matriz')}
+            className={`flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold transition ${
+              vista === 'matriz'
+                ? 'bg-teal text-pebble shadow-sm'
+                : 'text-jade hover:text-pebble'
+            }`}
+          >
+            <span>📑</span>
+            <span>Planilla Matriz Excel (12 Meses)</span>
+          </button>
         </div>
 
-        <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-pebble transition hover:bg-white/10 select-none">
-          <input
-            type="checkbox"
-            checked={mostrarDeudaTotal}
-            onChange={(e) => {
-              setMostrarDeudaTotal(e.target.checked);
-              try {
-                localStorage.setItem('gastos:mostrar-deuda-total', String(e.target.checked));
-              } catch {}
-            }}
-            className="h-4 w-4 rounded border-white/20 bg-white/10 text-teal accent-teal focus:ring-0 cursor-pointer"
-          />
-          <span className="font-medium">Ver card de compromiso / deuda total</span>
-        </label>
+        {vista === 'lista' && (
+          <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-pebble transition hover:bg-white/10 select-none">
+            <input
+              type="checkbox"
+              checked={mostrarDeudaTotal}
+              onChange={(e) => {
+                setMostrarDeudaTotal(e.target.checked);
+                try {
+                  localStorage.setItem('gastos:mostrar-deuda-total', String(e.target.checked));
+                } catch {}
+              }}
+              className="h-4 w-4 rounded border-white/20 bg-white/10 text-teal accent-teal focus:ring-0 cursor-pointer"
+            />
+            <span className="font-medium">Sumar todas las cuotas futuras</span>
+          </label>
+        )}
       </div>
+
+      {vista === 'matriz' ? (
+        <ExcelMatrixGrid />
+      ) : (
+        <>
+          {/* Encabezado del Resumen */}
+          <div className="flex items-center gap-2">
+            <p className="label text-[11px]">Resumen de movimientos</p>
+            <span className="rounded-full bg-teal/15 px-2.5 py-0.5 text-[11px] font-semibold text-cyan">
+              📅 {stats.mesReferencia === currentYM ? 'Mes actual' : 'Mes seleccionado'}: {monthLabel(stats.mesReferencia + '-01', { month: 'long', year: 'numeric' })}
+            </span>
+          </div>
 
       {/* Tarjetas resumen superiores */}
       <div className={`grid gap-3 ${mostrarDeudaTotal ? 'grid-cols-2 lg:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4'}`}>
@@ -501,18 +539,18 @@ export default function MovimientosGrid() {
       {/* VISTA 1: TABLA EXPANSIVA PARA PC */}
       <div className="glass hidden overflow-hidden md:block">
         <div className="custom-scrollbar overflow-x-auto">
-          <table className="w-full min-w-[880px] text-left text-sm">
+          <table className="w-full text-left text-xs md:text-sm">
             <thead>
-              <tr className="border-b border-white/10 text-xs uppercase tracking-wider text-jade">
-                <th className="whitespace-nowrap px-4 py-3.5 font-medium">Fecha</th>
-                <th className="min-w-[180px] px-4 py-3.5 font-medium">Descripción</th>
-                <th className="whitespace-nowrap px-3 py-3.5 font-medium">Naturaleza</th>
-                <th className="whitespace-nowrap px-3 py-3.5 font-medium">Categoría</th>
-                <th className="whitespace-nowrap px-3 py-3.5 font-medium">Cuenta / Tarjeta</th>
-                <th className="whitespace-nowrap px-3 py-3.5 text-center font-medium">Cuotas</th>
-                <th className="whitespace-nowrap px-4 py-3.5 text-right font-medium">Monto</th>
-                <th className="whitespace-nowrap px-3 py-3.5 text-center font-medium">Liquidación</th>
-                <th className="w-12 whitespace-nowrap px-3 py-3.5 text-center font-medium">
+              <tr className="border-b border-white/10 text-[11px] uppercase tracking-wider text-jade">
+                <th className="whitespace-nowrap px-2.5 py-2.5 font-medium">Fecha</th>
+                <th className="min-w-[150px] px-2.5 py-2.5 font-medium">Descripción</th>
+                <th className="whitespace-nowrap px-2 py-2.5 font-medium">Naturaleza</th>
+                <th className="whitespace-nowrap px-2 py-2.5 font-medium">Categoría</th>
+                <th className="whitespace-nowrap px-2 py-2.5 font-medium">Cuenta / Tarjeta</th>
+                <th className="whitespace-nowrap px-2 py-2.5 text-center font-medium">Cuotas</th>
+                <th className="whitespace-nowrap px-2.5 py-2.5 text-right font-medium">Monto</th>
+                <th className="whitespace-nowrap px-2 py-2.5 text-center font-medium">Liquidación</th>
+                <th className="w-9 whitespace-nowrap px-1.5 py-2.5 text-center font-medium">
                   <span className="sr-only">Acciones</span>
                 </th>
               </tr>
@@ -521,15 +559,15 @@ export default function MovimientosGrid() {
               {!rows &&
                 Array.from({ length: 6 }).map((_, i) => (
                   <tr key={i} className="animate-pulse">
-                    <td className="px-4 py-3.5"><div className="h-4 w-14 rounded bg-white/5" /></td>
-                    <td className="px-4 py-3.5"><div className="h-4 w-44 rounded bg-white/5" /></td>
-                    <td className="px-3 py-3.5"><div className="h-4 w-16 rounded bg-white/5" /></td>
-                    <td className="px-3 py-3.5"><div className="h-5 w-24 rounded-full bg-white/5" /></td>
-                    <td className="px-3 py-3.5"><div className="h-4 w-20 rounded bg-white/5" /></td>
-                    <td className="px-3 py-3.5 text-center"><div className="mx-auto h-5 w-14 rounded-full bg-white/5" /></td>
-                    <td className="px-4 py-3.5 text-right"><div className="ml-auto h-4 w-20 rounded bg-white/5" /></td>
-                    <td className="px-3 py-3.5 text-center"><div className="mx-auto h-5 w-16 rounded-full bg-white/5" /></td>
-                    <td className="px-3 py-3.5 text-center"><div className="mx-auto h-6 w-6 rounded bg-white/5" /></td>
+                    <td className="px-2.5 py-2"><div className="h-4 w-12 rounded bg-white/5" /></td>
+                    <td className="px-2.5 py-2"><div className="h-4 w-36 rounded bg-white/5" /></td>
+                    <td className="px-2 py-2"><div className="h-4 w-14 rounded bg-white/5" /></td>
+                    <td className="px-2 py-2"><div className="h-5 w-20 rounded-full bg-white/5" /></td>
+                    <td className="px-2 py-2"><div className="h-4 w-16 rounded bg-white/5" /></td>
+                    <td className="px-2 py-2 text-center"><div className="mx-auto h-5 w-12 rounded-full bg-white/5" /></td>
+                    <td className="px-2.5 py-2 text-right"><div className="ml-auto h-4 w-16 rounded bg-white/5" /></td>
+                    <td className="px-2 py-2 text-center"><div className="mx-auto h-5 w-14 rounded-full bg-white/5" /></td>
+                    <td className="px-1.5 py-2 text-center"><div className="mx-auto h-5 w-5 rounded bg-white/5" /></td>
                   </tr>
                 ))}
 
@@ -550,18 +588,18 @@ export default function MovimientosGrid() {
                     className={`group cursor-pointer transition hover:bg-white/[0.06] ${t.saldado ? 'opacity-70' : ''}`}
                     title="Tocá para editar o eliminar"
                   >
-                    <td className="num whitespace-nowrap px-4 py-3.5 text-xs text-jade">
+                    <td className="num whitespace-nowrap px-2.5 py-2 text-xs text-jade">
                       {fmtDate(t.fecha_compra)}
                     </td>
-                    <td className="px-4 py-3.5 font-medium text-pebble">
-                      <div className="flex max-w-[260px] items-center gap-2 lg:max-w-xs xl:max-w-md">
+                    <td className="px-2.5 py-2 font-medium text-pebble">
+                      <div className="flex max-w-[200px] items-center gap-1.5 lg:max-w-xs xl:max-w-md">
                         <span className="truncate" title={t.descripcion}>{t.descripcion}</span>
                       </div>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3.5 text-xs">
-                      <div className="flex flex-wrap items-center gap-1.5">
+                    <td className="whitespace-nowrap px-2 py-2 text-xs">
+                      <div className="flex flex-wrap items-center gap-1">
                         <span
-                          className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium ${
+                          className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10.5px] font-medium ${
                             esFijo ? 'bg-cyan/15 text-cyan' : 'bg-white/5 text-jade'
                           }`}
                         >
@@ -569,7 +607,7 @@ export default function MovimientosGrid() {
                         </span>
                         {esComp && (
                           <span
-                            className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-400"
+                            className="inline-flex items-center gap-0.5 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10.5px] font-medium text-amber-400"
                             title={`Compartido al ${t.porcentaje_propio ?? 50}% ${t.compartido_con ? `con ${t.compartido_con}` : ''}`}
                           >
                             👥 {t.porcentaje_propio ?? 50}%
@@ -577,10 +615,10 @@ export default function MovimientosGrid() {
                         )}
                       </div>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3.5 text-xs">
+                    <td className="whitespace-nowrap px-2 py-2 text-xs">
                       {cat ? (
                         <span
-                          className="inline-flex max-w-[160px] items-center gap-1.5 truncate rounded-full px-2.5 py-0.5 text-pebble"
+                          className="inline-flex max-w-[140px] items-center gap-1 truncate rounded-full px-2 py-0.5 text-pebble text-[11px]"
                           style={{ background: `${cat.color}22`, border: `1px solid ${cat.color}55` }}
                         >
                           <span className="shrink-0">{cat.icono ?? '🏷️'}</span>
@@ -590,9 +628,9 @@ export default function MovimientosGrid() {
                         <span className="text-jade">—</span>
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3.5 text-xs text-jade">
+                    <td className="whitespace-nowrap px-2 py-2 text-xs text-jade">
                       {cta ? (
-                        <span className="inline-flex max-w-[150px] items-center gap-1.5 truncate">
+                        <span className="inline-flex max-w-[140px] items-center gap-1 truncate text-[11px]">
                           <span className="shrink-0">{cuentaIcon(cta.tipo)}</span>
                           <span className="truncate">{cta.nombre}</span>
                         </span>
@@ -600,9 +638,9 @@ export default function MovimientosGrid() {
                         <span className="text-jade/60">—</span>
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3.5 text-center text-xs">
+                    <td className="whitespace-nowrap px-2 py-2 text-center text-xs">
                       <span
-                        className={`inline-flex items-center justify-center whitespace-nowrap rounded-full px-2.5 py-0.5 font-medium ${
+                        className={`inline-flex items-center justify-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${
                           p.state === 'act'
                             ? 'bg-teal/20 text-teal'
                             : p.state === 'pend'
@@ -613,8 +651,8 @@ export default function MovimientosGrid() {
                         {t.cuotas_totales > 1 ? p.label : '1 pago'}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3.5 text-right">
-                      <span className={`num font-bold text-sm tracking-tight ${color}`}>
+                    <td className="whitespace-nowrap px-2.5 py-2 text-right">
+                      <span className={`num font-bold text-xs md:text-sm tracking-tight ${color}`}>
                         {t.tipo === 'egreso' ? '-' : '+'}
                         {money(miParte)}
                       </span>
@@ -624,12 +662,12 @@ export default function MovimientosGrid() {
                         </div>
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3.5 text-center">
+                    <td className="whitespace-nowrap px-2 py-2 text-center">
                       {esComp ? (
                         <button
                           type="button"
                           onClick={(e) => toggleSaldadoRapido(t, e)}
-                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium transition ${
                             t.saldado
                               ? 'bg-income/20 text-income hover:bg-income/30'
                               : 'bg-debt/20 text-debt hover:bg-debt/30'
@@ -644,9 +682,9 @@ export default function MovimientosGrid() {
                         <span className="text-xs text-jade/50">—</span>
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3.5 text-center text-xs">
+                    <td className="whitespace-nowrap px-1.5 py-2 text-center text-xs">
                       <span
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-white/5 text-jade transition group-hover:bg-cyan/15 group-hover:text-cyan"
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white/5 text-jade transition group-hover:bg-cyan/15 group-hover:text-cyan"
                         title="Editar movimiento"
                       >
                         ✎
@@ -754,6 +792,8 @@ export default function MovimientosGrid() {
           </div>
         )}
       </div>
+      </>
+      )}
 
       {editing && (
         <TransactionEditor

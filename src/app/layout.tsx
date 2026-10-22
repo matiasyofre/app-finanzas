@@ -27,7 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="font-sans">
         <AuthGate>
           <BottomNav />
-          <main className="mx-auto w-full max-w-md px-4 pb-36 pt-[max(1.25rem,env(safe-area-inset-top))] md:max-w-5xl md:px-8 md:pt-24 lg:max-w-7xl">
+          <main className="mx-auto w-full max-w-md px-3 pb-36 pt-[max(1.25rem,env(safe-area-inset-top))] md:max-w-6xl md:px-5 md:pt-20 lg:max-w-[94rem] xl:max-w-[102rem] 2xl:max-w-[112rem]">
             {children}
           </main>
           <QuickAddFab />
