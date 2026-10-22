@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import {
   BarChart,
   Bar,
@@ -64,6 +65,8 @@ export default function EscenariosSimulator() {
   const [nuevoEscModal, setNuevoEscModal] = useState(false);
   const [nuevoEscNombre, setNuevoEscNombre] = useState('');
   const [nuevoEscDesc, setNuevoEscDesc] = useState('');
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const currentYM = todayISO().slice(0, 7);
 
@@ -339,9 +342,161 @@ export default function EscenariosSimulator() {
     setFormMonto('');
   };
 
+  const handleExportExcel = () => {
+    const wb = XLSX.utils.book_new();
+
+    // 1. Hoja Comparativa 12 Meses
+    const headerFlujo = [
+      'Mes',
+      'Ingresos Reales',
+      'Egresos Reales',
+      'Saldo Real',
+      'Ingresos Simulados (+)',
+      'Egresos Simulados (-)',
+      'Saldo Proyectado con Escenario',
+      'Variación Neta Mensual',
+    ];
+
+    const dataFlujo: (string | number)[][] = flujoSimulado.map((f, i) => {
+      const base = flujoReal[i] || { ingresos: 0, egresos: 0 };
+      return [
+        f.label,
+        Math.round(base.ingresos),
+        Math.round(base.egresos),
+        Math.round(f.saldoReal),
+        Math.round(f.deltaIngresos),
+        Math.round(f.deltaEgresos),
+        Math.round(f.saldoSimulado),
+        Math.round(f.impactoNeto),
+      ];
+    });
+
+    if (diagnostico) {
+      dataFlujo.push([]);
+      dataFlujo.push([
+        'DIAGNÓSTICO EJECUTIVO',
+        diagnostico.esDeficitario
+          ? 'RIESGO DE DÉFICIT'
+          : diagnostico.esAjustado
+          ? 'AJUSTADO'
+          : 'VIABLE',
+      ]);
+      dataFlujo.push(['Mes más crítico', diagnostico.mesPeor]);
+      dataFlujo.push(['Saldo mínimo proyectado', Math.round(diagnostico.peorSaldo)]);
+      dataFlujo.push(['Costo total asumido al bolsillo', Math.round(diagnostico.totalCostoBolsillo)]);
+      if (diagnostico.mesesConDeficit.length > 0) {
+        dataFlujo.push(['Meses con déficit proyectado', diagnostico.mesesConDeficit.join(', ')]);
+      }
+    }
+
+    const wsFlujo = XLSX.utils.aoa_to_sheet([headerFlujo, ...dataFlujo]);
+    wsFlujo['!cols'] = [
+      { wch: 14 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 28 },
+      { wch: 22 },
+    ];
+    XLSX.utils.book_append_sheet(wb, wsFlujo, 'Comparativa 12 Meses');
+
+    // 2. Hoja Detalle de Escenarios
+    const headerEsc = [
+      'Escenario',
+      'Concepto',
+      'Tipo',
+      'Modalidad',
+      'Cuotas',
+      'Monto Cuota',
+      'Monto Total',
+      'Mes Inicio',
+      '% Propio',
+      'Impacto Bolsillo',
+      'Cuenta Estimada',
+      'Estado',
+    ];
+
+    const dataEsc: (string | number)[][] = [];
+    for (const esc of escenarios) {
+      for (const m of esc.movimientos) {
+        const esCuota = m.cuotas_totales > 1;
+        const miTotal = m.monto_total * (m.porcentaje_propio / 100);
+        dataEsc.push([
+          esc.nombre,
+          m.descripcion,
+          m.tipo === 'egreso' ? 'Gasto' : 'Ingreso',
+          esCuota ? 'Cuotas' : m.es_recurrente ? 'Recurrente' : 'Único',
+          m.cuotas_totales,
+          Math.round(m.monto_cuota || m.monto_total / m.cuotas_totales),
+          Math.round(m.monto_total),
+          m.mes_inicio,
+          `${m.porcentaje_propio}%`,
+          Math.round(miTotal),
+          m.cuenta_simulada || '—',
+          esc.activo && m.activo ? 'Activo en proyección' : 'Pausado',
+        ]);
+      }
+    }
+
+    const wsEsc = XLSX.utils.aoa_to_sheet([headerEsc, ...dataEsc]);
+    wsEsc['!cols'] = [
+      { wch: 26 },
+      { wch: 30 },
+      { wch: 12 },
+      { wch: 14 },
+      { wch: 10 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 18 },
+      { wch: 20 },
+      { wch: 22 },
+    ];
+    XLSX.utils.book_append_sheet(wb, wsEsc, 'Detalle Escenarios');
+
+    XLSX.writeFile(wb, `Escenarios_Simulacion_${currentYM}.xlsx`);
+  };
+
+  const handleExportJSON = () => {
+    const blob = new Blob([JSON.stringify(escenarios, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Escenarios_Backup_${currentYM}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string);
+        if (Array.isArray(parsed)) {
+          setEscenarios(parsed);
+          saveEscenarios(parsed);
+          alert(`¡${parsed.length} escenarios importados correctamente!`);
+        } else {
+          alert('El archivo seleccionado no tiene el formato de escenarios.');
+        }
+      } catch {
+        alert('Error al leer el archivo JSON.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
   return (
     <div className="space-y-6">
-      {/* Encabezado del Simulador */}
+      {/* Encabezado del Simulador con Acciones de Exportación e Importación */}
       <div className="glass p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -349,17 +504,54 @@ export default function EscenariosSimulator() {
             <h2 className="text-base font-bold text-pebble">Simulador de Escenarios Financieros ("What-If")</h2>
           </div>
           <p className="text-xs text-jade mt-1">
-            Proyectá gastos o ingresos antes de comprometer tus fondos. Comprobá el impacto en tu liquidez mensual a 12 meses.
+            Proyectá gastos o ingresos antes de comprometer tus fondos. Guardados automáticamente en tu dispositivo.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setNuevoEscModal(true)}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-pebble px-4 py-2.5 text-xs font-bold transition shadow-glow shrink-0"
-        >
-          <span>➕</span> Nuevo Escenario
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleImportJSON}
+            accept=".json"
+            className="hidden"
+          />
+
+          <button
+            type="button"
+            onClick={handleExportExcel}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-pebble px-3 py-2 text-xs font-semibold transition"
+            title="Exportar informe de simulación y comparativa a Excel (.xlsx)"
+          >
+            <span>📥</span> Exportar Excel
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportJSON}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-pebble px-3 py-2 text-xs font-semibold transition"
+            title="Descargar archivo de respaldo de tus escenarios (.json)"
+          >
+            <span>💾</span> Guardar Backup
+          </button>
+
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-pebble px-3 py-2 text-xs font-semibold transition"
+            title="Importar escenarios desde un archivo .json"
+          >
+            <span>📂</span> Importar
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setNuevoEscModal(true)}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-pebble px-3.5 py-2 text-xs font-bold transition shadow-glow shrink-0"
+          >
+            <span>➕</span> Nuevo Escenario
+          </button>
+        </div>
       </div>
 
       {/* Diagnóstico de Viabilidad */}
