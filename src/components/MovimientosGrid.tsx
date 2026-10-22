@@ -22,6 +22,35 @@ function progreso(t: Transaccion) {
   return { label: `${cur}/${t.cuotas_totales}`, cur, state: 'act' as const };
 }
 
+/** Devuelve el monto neto que impacta exclusivamente en un mes específico ("YYYY-MM"). */
+function getMontoMes(t: Transaccion, targetYM: string): number {
+  const startYM = (t.fecha_primera_cuota || t.fecha_compra).slice(0, 7);
+  const esFijo = t.naturaleza === 'fijo' || Boolean(t.es_recurrente);
+
+  if (esFijo) {
+    if (startYM <= targetYM) {
+      return t.monto_cuota || t.monto_total;
+    }
+    return 0;
+  }
+
+  if (t.cuotas_totales > 1) {
+    const diff = monthDiff(startYM, targetYM);
+    const nroCuota = t.cuota_actual + diff;
+    if (nroCuota >= t.cuota_actual && nroCuota <= t.cuotas_totales) {
+      if (nroCuota === t.cuotas_totales) {
+        const resto = t.monto_total - (t.monto_cuota * (t.cuotas_totales - 1));
+        return resto > 0 ? resto : (t.monto_cuota || (t.monto_total / t.cuotas_totales));
+      }
+      return t.monto_cuota || (t.monto_total / t.cuotas_totales);
+    }
+    return 0;
+  }
+
+  // 1 solo pago: impacta únicamente en su mes de compra/inicio
+  return startYM === targetYM ? t.monto_total : 0;
+}
+
 export default function MovimientosGrid() {
   const { categorias, cuentas } = useCatalogs();
   const [rows, setRows] = useState<Transaccion[] | null>(null);
@@ -32,6 +61,14 @@ export default function MovimientosGrid() {
   const [selectedCat, setSelectedCat] = useState<string>('todas');
   const [editing, setEditing] = useState<Transaccion | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mostrarDeudaTotal, setMostrarDeudaTotal] = useState(false);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('gastos:mostrar-deuda-total');
+      if (saved === 'true') setMostrarDeudaTotal(true);
+    } catch {}
+  }, []);
 
   const currentYM = todayISO().slice(0, 7);
 
@@ -172,64 +209,161 @@ export default function MovimientosGrid() {
     });
   }, [rows, q, filtro, periodo, selectedCuenta, selectedCat, catMap, ctaMap, currentYM]);
 
-  // Totales calculados con el impacto real sobre lo visible
+  // Totales calculados con el impacto real sobre lo visible: mes en curso vs total acumulado
   const stats = useMemo(() => {
-    if (!visibles) return { totalEgresos: 0, totalIngresos: 0, fijos: 0, compartidos: 0, pendientesCobro: 0, pendientesPago: 0 };
+    const mesReferencia = (periodo && /^\d{4}-\d{2}$/.test(periodo)) ? periodo : currentYM;
+
+    if (!visibles) {
+      return {
+        mes: { egresos: 0, ingresos: 0, fijos: 0, compartidos: 0, pendientesCobro: 0, pendientesPago: 0 },
+        total: { egresos: 0, ingresos: 0, fijos: 0, compartidos: 0, pendientesCobro: 0, pendientesPago: 0 },
+        mesReferencia,
+      };
+    }
+
+    let egresosMes = 0;
+    let ingresosMes = 0;
+    let fijosMes = 0;
+    let compartidosMes = 0;
+    let pendientesCobroMes = 0;
+    let pendientesPagoMes = 0;
+
     let totalEgresos = 0;
     let totalIngresos = 0;
-    let fijos = 0;
-    let compartidos = 0;
-    let pendientesCobro = 0;
-    let pendientesPago = 0;
+    let fijosTotal = 0;
+    let compartidosTotal = 0;
+    let pendientesCobroTotal = 0;
+    let pendientesPagoTotal = 0;
 
     for (const t of visibles) {
-      const partePropia = t.naturaleza === 'compartido' ? (t.monto_total * ((t.porcentaje_propio ?? 50) / 100)) : t.monto_total;
+      const partePropiaPct = (t.porcentaje_propio ?? (t.naturaleza === 'compartido' ? 50 : 100)) / 100;
+
+      // 1. IMPACTO EN EL MES (Mes en curso o mes seleccionado)
+      const montoMes = getMontoMes(t, mesReferencia);
+      if (montoMes > 0) {
+        const partePropiaMes = t.naturaleza === 'compartido' ? (montoMes * partePropiaPct) : montoMes;
+        if (t.tipo === 'ingreso') {
+          ingresosMes += montoMes;
+        } else {
+          egresosMes += partePropiaMes;
+          if (t.naturaleza === 'fijo' || t.es_recurrente) fijosMes += partePropiaMes;
+          if (t.naturaleza === 'compartido') {
+            compartidosMes += partePropiaMes;
+            if (!t.saldado) {
+              if (t.pagado_por === 'yo') {
+                pendientesCobroMes += (montoMes - partePropiaMes);
+              } else {
+                pendientesPagoMes += partePropiaMes;
+              }
+            }
+          }
+        }
+      }
+
+      // 2. COMPROMISO TOTAL / HISTÓRICO (todas las cuotas y compromisos futuros)
+      const partePropiaTotal = t.naturaleza === 'compartido' ? (t.monto_total * partePropiaPct) : t.monto_total;
       if (t.tipo === 'ingreso') {
         totalIngresos += t.monto_total;
       } else {
-        totalEgresos += partePropia;
-        if (t.naturaleza === 'fijo') fijos += partePropia;
+        totalEgresos += partePropiaTotal;
+        if (t.naturaleza === 'fijo' || t.es_recurrente) fijosTotal += partePropiaTotal;
         if (t.naturaleza === 'compartido') {
-          compartidos += partePropia;
+          compartidosTotal += partePropiaTotal;
           if (!t.saldado) {
             if (t.pagado_por === 'yo') {
-              pendientesCobro += (t.monto_total - partePropia);
+              pendientesCobroTotal += (t.monto_total - partePropiaTotal);
             } else {
-              pendientesPago += partePropia;
+              pendientesPagoTotal += partePropiaTotal;
             }
           }
         }
       }
     }
-    return { totalEgresos, totalIngresos, fijos, compartidos, pendientesCobro, pendientesPago };
-  }, [visibles]);
+
+    return {
+      mes: {
+        egresos: egresosMes,
+        ingresos: ingresosMes,
+        fijos: fijosMes,
+        compartidos: compartidosMes,
+        pendientesCobro: pendientesCobroMes,
+        pendientesPago: pendientesPagoMes,
+      },
+      total: {
+        egresos: totalEgresos,
+        ingresos: totalIngresos,
+        fijos: fijosTotal,
+        compartidos: compartidosTotal,
+        pendientesCobro: pendientesCobroTotal,
+        pendientesPago: pendientesPagoTotal,
+      },
+      mesReferencia,
+    };
+  }, [visibles, periodo, currentYM]);
 
   if (error) return <div className="glass p-6 text-sm text-debt">{error}</div>;
 
   return (
     <div className="space-y-5">
+      {/* Encabezado del Resumen con Tilde para Activar/Desactivar Deuda Total */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <p className="label text-[11px]">Resumen de movimientos</p>
+          <span className="rounded-full bg-teal/15 px-2.5 py-0.5 text-[11px] font-semibold text-cyan">
+            📅 {stats.mesReferencia === currentYM ? 'Mes actual' : 'Mes seleccionado'}: {monthLabel(stats.mesReferencia + '-01', { month: 'long', year: 'numeric' })}
+          </span>
+        </div>
+
+        <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-pebble transition hover:bg-white/10 select-none">
+          <input
+            type="checkbox"
+            checked={mostrarDeudaTotal}
+            onChange={(e) => {
+              setMostrarDeudaTotal(e.target.checked);
+              try {
+                localStorage.setItem('gastos:mostrar-deuda-total', String(e.target.checked));
+              } catch {}
+            }}
+            className="h-4 w-4 rounded border-white/20 bg-white/10 text-teal accent-teal focus:ring-0 cursor-pointer"
+          />
+          <span className="font-medium">Ver card de compromiso / deuda total</span>
+        </label>
+      </div>
+
       {/* Tarjetas resumen superiores */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className={`grid gap-3 ${mostrarDeudaTotal ? 'grid-cols-2 lg:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4'}`}>
         <div className="glass animate-rise p-4">
-          <p className="label text-[11px]">Egresos propios</p>
-          <p className="num mt-1 text-2xl font-bold text-debt">-{money(stats.totalEgresos)}</p>
-          <p className="text-[11px] text-jade">calculado con tu parte real</p>
+          <p className="label text-[11px]">Egresos del mes</p>
+          <p className="num mt-1 text-2xl font-bold text-debt">-{money(stats.mes.egresos)}</p>
+          <p className="text-[11px] text-jade">cuota y gastos de {monthLabel(stats.mesReferencia + '-01', { month: 'short' })}</p>
         </div>
         <div className="glass animate-rise p-4 [animation-delay:60ms]">
-          <p className="label text-[11px]">Ingresos</p>
-          <p className="num mt-1 text-2xl font-bold text-income">+{money(stats.totalIngresos)}</p>
-          <p className="text-[11px] text-jade">total ingresado</p>
+          <p className="label text-[11px]">Ingresos del mes</p>
+          <p className="num mt-1 text-2xl font-bold text-income">+{money(stats.mes.ingresos)}</p>
+          <p className="text-[11px] text-jade">ingresado en el mes</p>
         </div>
         <div className="glass animate-rise p-4 [animation-delay:120ms]">
-          <p className="label text-[11px]">Te deben (pendiente)</p>
-          <p className="num mt-1 text-2xl font-bold text-income">{money(stats.pendientesCobro)}</p>
+          <p className="label text-[11px]">Te deben (este mes)</p>
+          <p className="num mt-1 text-2xl font-bold text-income">{money(stats.mes.pendientesCobro)}</p>
           <p className="text-[11px] text-jade">por gastos que pagaste vos</p>
         </div>
         <div className="glass animate-rise p-4 [animation-delay:180ms]">
-          <p className="label text-[11px]">Debés (pendiente)</p>
-          <p className="num mt-1 text-2xl font-bold text-debt">{money(stats.pendientesPago)}</p>
+          <p className="label text-[11px]">Debés (este mes)</p>
+          <p className="num mt-1 text-2xl font-bold text-debt">{money(stats.mes.pendientesPago)}</p>
           <p className="text-[11px] text-jade">por gastos que pagó otro</p>
         </div>
+
+        {/* Card actual donde sumariza todo (activable / desactivable según tilde) */}
+        {mostrarDeudaTotal && (
+          <div className="glass animate-rise border-amber-500/30 bg-amber-500/10 p-4 [animation-delay:200ms] col-span-2 lg:col-span-1">
+            <div className="flex items-center justify-between">
+              <p className="label text-[11px] text-amber-300">Deuda total futura</p>
+              <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-bold text-amber-300">Suma todo</span>
+            </div>
+            <p className="num mt-1 text-2xl font-bold text-amber-200">-{money(stats.total.egresos)}</p>
+            <p className="text-[11px] text-jade">todas las cuotas acumuladas</p>
+          </div>
+        )}
       </div>
 
       {/* Barra de Filtros Multifunción */}
@@ -345,135 +479,154 @@ export default function MovimientosGrid() {
 
       {/* VISTA 1: TABLA EXPANSIVA PARA PC */}
       <div className="glass hidden overflow-hidden md:block">
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="border-b border-white/10 text-xs uppercase tracking-wider text-jade">
-              <th className="px-5 py-3.5 font-medium">Fecha</th>
-              <th className="px-4 py-3.5 font-medium">Descripción</th>
-              <th className="px-4 py-3.5 font-medium">Naturaleza</th>
-              <th className="px-4 py-3.5 font-medium">Categoría</th>
-              <th className="px-4 py-3.5 font-medium">Cuenta / Tarjeta</th>
-              <th className="px-4 py-3.5 text-center font-medium">Cuotas</th>
-              <th className="px-4 py-3.5 text-right font-medium">Monto</th>
-              <th className="px-4 py-3.5 text-center font-medium">Liquidación</th>
-              <th className="px-3 py-3.5 text-center font-medium">Editar</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/5">
-            {!rows &&
-              Array.from({ length: 6 }).map((_, i) => (
-                <tr key={i}>
-                  <td colSpan={9} className="px-5 py-4">
-                    <div className="h-6 animate-pulse rounded bg-white/5" />
-                  </td>
-                </tr>
-              ))}
+        <div className="custom-scrollbar overflow-x-auto">
+          <table className="w-full min-w-[880px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/10 text-xs uppercase tracking-wider text-jade">
+                <th className="whitespace-nowrap px-4 py-3.5 font-medium">Fecha</th>
+                <th className="min-w-[180px] px-4 py-3.5 font-medium">Descripción</th>
+                <th className="whitespace-nowrap px-3 py-3.5 font-medium">Naturaleza</th>
+                <th className="whitespace-nowrap px-3 py-3.5 font-medium">Categoría</th>
+                <th className="whitespace-nowrap px-3 py-3.5 font-medium">Cuenta / Tarjeta</th>
+                <th className="whitespace-nowrap px-3 py-3.5 text-center font-medium">Cuotas</th>
+                <th className="whitespace-nowrap px-4 py-3.5 text-right font-medium">Monto</th>
+                <th className="whitespace-nowrap px-3 py-3.5 text-center font-medium">Liquidación</th>
+                <th className="w-12 whitespace-nowrap px-3 py-3.5 text-center font-medium">
+                  <span className="sr-only">Acciones</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {!rows &&
+                Array.from({ length: 6 }).map((_, i) => (
+                  <tr key={i} className="animate-pulse">
+                    <td className="px-4 py-3.5"><div className="h-4 w-14 rounded bg-white/5" /></td>
+                    <td className="px-4 py-3.5"><div className="h-4 w-44 rounded bg-white/5" /></td>
+                    <td className="px-3 py-3.5"><div className="h-4 w-16 rounded bg-white/5" /></td>
+                    <td className="px-3 py-3.5"><div className="h-5 w-24 rounded-full bg-white/5" /></td>
+                    <td className="px-3 py-3.5"><div className="h-4 w-20 rounded bg-white/5" /></td>
+                    <td className="px-3 py-3.5 text-center"><div className="mx-auto h-5 w-14 rounded-full bg-white/5" /></td>
+                    <td className="px-4 py-3.5 text-right"><div className="ml-auto h-4 w-20 rounded bg-white/5" /></td>
+                    <td className="px-3 py-3.5 text-center"><div className="mx-auto h-5 w-16 rounded-full bg-white/5" /></td>
+                    <td className="px-3 py-3.5 text-center"><div className="mx-auto h-6 w-6 rounded bg-white/5" /></td>
+                  </tr>
+                ))}
 
-            {visibles.map((t) => {
-              const cat = t.categoria_id ? catMap.get(t.categoria_id) : undefined;
-              const cta = t.cuenta_id ? ctaMap.get(t.cuenta_id) : undefined;
-              const p = progreso(t);
-              const color = t.tipo === 'ingreso' ? 'text-income' : 'text-debt';
-              const esComp = t.naturaleza === 'compartido';
-              const miParte = esComp ? t.monto_total * ((t.porcentaje_propio ?? 50) / 100) : t.monto_total;
+              {visibles.map((t) => {
+                const cat = t.categoria_id ? catMap.get(t.categoria_id) : undefined;
+                const cta = t.cuenta_id ? ctaMap.get(t.cuenta_id) : undefined;
+                const p = progreso(t);
+                const color = t.tipo === 'ingreso' ? 'text-income' : 'text-debt';
+                const esComp = t.naturaleza === 'compartido';
+                const miParte = esComp ? t.monto_total * ((t.porcentaje_propio ?? 50) / 100) : t.monto_total;
 
-              return (
-                <tr
-                  key={t.id}
-                  id={`mov-${t.id}`}
-                  onClick={() => setEditing(t)}
-                  className={`cursor-pointer transition hover:bg-white/[0.06] ${t.saldado ? 'opacity-70' : ''}`}
-                  title="Tocá para editar"
-                >
-                  <td className="num whitespace-nowrap px-5 py-3.5 text-xs text-jade">
-                    {fmtDate(t.fecha_compra)}
-                  </td>
-                  <td className="px-4 py-3.5 font-medium text-pebble">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate">{t.descripcion}</span>
-                      {t.es_recurrente && (
-                        <span className="rounded bg-teal/20 px-1.5 py-0.5 text-[10px] font-semibold text-teal">
-                          Fijo
-                        </span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3.5 text-xs">
-                    <span className="capitalize text-jade">
-                      {t.naturaleza === 'fijo' ? '📌 Fijo' : t.naturaleza === 'compartido' ? '👥 Compartido' : '⚡ Variable'}
-                    </span>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3.5 text-xs">
-                    {cat ? (
-                      <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-pebble" style={{ background: `${cat.color}22`, border: `1px solid ${cat.color}55` }}>
-                        <span>{cat.icono ?? '🏷️'}</span>
-                        <span>{cat.nombre}</span>
-                      </span>
-                    ) : (
-                      <span className="text-jade">—</span>
-                    )}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3.5 text-xs text-jade">
-                    {cta ? (
-                      <span className="inline-flex items-center gap-1">
-                        <span>{cuentaIcon(cta.tipo)}</span>
-                        <span>{cta.nombre}</span>
-                      </span>
-                    ) : (
-                      '—'
-                    )}
-                  </td>
-                  <td className="px-4 py-3.5 text-center text-xs">
-                    <span
-                      className={`inline-block rounded-full px-2 py-0.5 font-medium ${
-                        p.state === 'act'
-                          ? 'bg-teal/20 text-teal'
-                          : p.state === 'pend'
-                          ? 'bg-white/10 text-jade'
-                          : 'bg-white/5 text-jade/60'
-                      }`}
-                    >
-                      {t.cuotas_totales > 1 ? p.label : '1 pago'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3.5 text-right">
-                    <span className={`num font-bold ${color}`}>
-                      {t.tipo === 'egreso' ? '-' : '+'}
-                      {money(miParte)}
-                    </span>
-                    {esComp && (
-                      <div className="num text-[10px] text-jade line-through">
-                        Total {money(t.monto_total)}
+                return (
+                  <tr
+                    key={t.id}
+                    id={`mov-${t.id}`}
+                    onClick={() => setEditing(t)}
+                    className={`group cursor-pointer transition hover:bg-white/[0.06] ${t.saldado ? 'opacity-70' : ''}`}
+                    title="Tocá para editar o eliminar"
+                  >
+                    <td className="num whitespace-nowrap px-4 py-3.5 text-xs text-jade">
+                      {fmtDate(t.fecha_compra)}
+                    </td>
+                    <td className="px-4 py-3.5 font-medium text-pebble">
+                      <div className="flex max-w-[260px] items-center gap-2 lg:max-w-xs xl:max-w-md">
+                        <span className="truncate" title={t.descripcion}>{t.descripcion}</span>
+                        {t.es_recurrente && (
+                          <span className="shrink-0 rounded bg-teal/20 px-1.5 py-0.5 text-[10px] font-semibold text-teal">
+                            Fijo
+                          </span>
+                        )}
                       </div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3.5 text-center">
-                    {esComp ? (
-                      <button
-                        onClick={(e) => toggleSaldadoRapido(t, e)}
-                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
-                          t.saldado
-                            ? 'bg-income/20 text-income hover:bg-income/30'
-                            : 'bg-debt/20 text-debt hover:bg-debt/30'
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3.5 text-xs">
+                      <span className="inline-flex items-center gap-1 capitalize text-jade">
+                        {t.naturaleza === 'fijo' ? '📌 Fijo' : t.naturaleza === 'compartido' ? '👥 Compartido' : '⚡ Variable'}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3.5 text-xs">
+                      {cat ? (
+                        <span
+                          className="inline-flex max-w-[160px] items-center gap-1.5 truncate rounded-full px-2.5 py-0.5 text-pebble"
+                          style={{ background: `${cat.color}22`, border: `1px solid ${cat.color}55` }}
+                        >
+                          <span className="shrink-0">{cat.icono ?? '🏷️'}</span>
+                          <span className="truncate">{cat.nombre}</span>
+                        </span>
+                      ) : (
+                        <span className="text-jade">—</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3.5 text-xs text-jade">
+                      {cta ? (
+                        <span className="inline-flex max-w-[150px] items-center gap-1.5 truncate">
+                          <span className="shrink-0">{cuentaIcon(cta.tipo)}</span>
+                          <span className="truncate">{cta.nombre}</span>
+                        </span>
+                      ) : (
+                        <span className="text-jade/60">—</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3.5 text-center text-xs">
+                      <span
+                        className={`inline-flex items-center justify-center whitespace-nowrap rounded-full px-2.5 py-0.5 font-medium ${
+                          p.state === 'act'
+                            ? 'bg-teal/20 text-teal'
+                            : p.state === 'pend'
+                            ? 'bg-white/10 text-jade'
+                            : 'bg-white/5 text-jade/60'
                         }`}
-                        title="Tocá para cambiar estado"
                       >
-                        {t.saldado
-                          ? t.pagado_por === 'yo' ? '✓ Cobrado' : '✓ Pagado'
-                          : t.pagado_por === 'yo' ? '⏳ Por cobrar' : '⏳ Por pagar'}
-                      </button>
-                    ) : (
-                      <span className="text-xs text-jade">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-3.5 text-center text-xs text-jade hover:text-pebble">
-                    ✎
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                        {t.cuotas_totales > 1 ? p.label : '1 pago'}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3.5 text-right">
+                      <span className={`num font-bold text-sm tracking-tight ${color}`}>
+                        {t.tipo === 'egreso' ? '-' : '+'}
+                        {money(miParte)}
+                      </span>
+                      {esComp && (
+                        <div className="num text-[10px] text-jade line-through">
+                          Total {money(t.monto_total)}
+                        </div>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3.5 text-center">
+                      {esComp ? (
+                        <button
+                          type="button"
+                          onClick={(e) => toggleSaldadoRapido(t, e)}
+                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
+                            t.saldado
+                              ? 'bg-income/20 text-income hover:bg-income/30'
+                              : 'bg-debt/20 text-debt hover:bg-debt/30'
+                          }`}
+                          title="Tocá para cambiar estado"
+                        >
+                          {t.saldado
+                            ? t.pagado_por === 'yo' ? '✓ Cobrado' : '✓ Pagado'
+                            : t.pagado_por === 'yo' ? '⏳ Por cobrar' : '⏳ Por pagar'}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-jade/50">—</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3.5 text-center text-xs">
+                      <span
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-white/5 text-jade transition group-hover:bg-cyan/15 group-hover:text-cyan"
+                        title="Editar movimiento"
+                      >
+                        ✎
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
 
         {rows && !visibles.length && (
           <div className="p-8 text-center text-xs text-jade">

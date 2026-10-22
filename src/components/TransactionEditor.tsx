@@ -54,6 +54,8 @@ export default function TransactionEditor({
 }) {
   const [f, setF] = useState<Transaccion | null>(tx);
   const [montoStr, setMontoStr] = useState('');
+  const [modoMonto, setModoMonto] = useState<'total' | 'cuota'>('total');
+  const [montoCuotaStr, setMontoCuotaStr] = useState('');
   const [mes, setMes] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -91,8 +93,11 @@ export default function TransactionEditor({
     setErr(null);
     setMostrarCuotas(false);
     setEditandoCuota(null);
+    setModoMonto('total');
     if (tx) {
       setMontoStr(String(tx.monto_total).replace('.', ','));
+      const cNom = tx.monto_cuota || (tx.cuotas_totales > 0 ? tx.monto_total / tx.cuotas_totales : tx.monto_total);
+      setMontoCuotaStr(String(Math.round(cNom * 100) / 100).replace('.', ','));
       setMes(tx.fecha_primera_cuota.slice(0, 7));
       if (tx.cuotas_totales > 1 || tx.naturaleza === 'fijo' || tx.es_recurrente) {
         loadCuotas(tx.id);
@@ -360,27 +365,97 @@ export default function TransactionEditor({
           <input id="edit-desc" className={input} value={f.descripcion} onChange={(e) => set('descripcion', e.target.value)} />
         </label>
 
-        <div className="grid grid-cols-2 gap-3">
-          <label className="block">
-            <span className="label">Monto total</span>
-            <input id="edit-monto" inputMode="decimal" className={`${input} num`} value={montoStr} onChange={(e) => setMontoStr(e.target.value.replace(/[^\d.,]/g, ''))} />
-          </label>
-          <label className="block">
-            <span className="label">Fecha compra</span>
-            <input
-              id="edit-fecha"
-              type="date"
-              className={input}
-              value={f.fecha_compra}
-              onChange={(e) => { set('fecha_compra', e.target.value); if (e.target.value) recalc(e.target.value, f.cuenta_id); }}
-            />
-          </label>
+        <div>
+          {f.cuotas_totales > 1 && (
+            <div className="flex items-center justify-between pb-1.5">
+              <div className="flex items-center gap-1 rounded-lg bg-white/5 p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setModoMonto('total')}
+                  className={`rounded px-2 py-0.5 text-[11px] font-medium transition ${
+                    modoMonto === 'total' ? 'bg-cyan/20 text-cyan font-bold shadow-sm' : 'text-jade hover:text-pebble'
+                  }`}
+                >
+                  Total general
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModoMonto('cuota')}
+                  className={`rounded px-2 py-0.5 text-[11px] font-medium transition ${
+                    modoMonto === 'cuota' ? 'bg-cyan/20 text-cyan font-bold shadow-sm' : 'text-jade hover:text-pebble'
+                  }`}
+                >
+                  Importe por cuota
+                </button>
+              </div>
+
+              <span className="text-[11px] text-jade">
+                {modoMonto === 'total'
+                  ? `${f.cuotas_totales} cuotas de ${money(total / f.cuotas_totales)}`
+                  : `Total: ${money(total)}`}
+              </span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="label">
+                {modoMonto === 'cuota' && f.cuotas_totales > 1 ? 'Importe por cuota' : 'Monto total'}
+              </span>
+              <input
+                id="edit-monto"
+                inputMode="decimal"
+                className={`${input} num`}
+                value={modoMonto === 'cuota' && f.cuotas_totales > 1 ? montoCuotaStr : montoStr}
+                onChange={(e) => {
+                  const val = e.target.value.replace(/[^\d.,]/g, '');
+                  if (modoMonto === 'cuota' && f.cuotas_totales > 1) {
+                    setMontoCuotaStr(val);
+                    const nVal = parseAmount(val) * f.cuotas_totales;
+                    setMontoStr(String(Math.round(nVal * 100) / 100).replace('.', ','));
+                  } else {
+                    setMontoStr(val);
+                    if (f.cuotas_totales > 1) {
+                      const cVal = parseAmount(val) / f.cuotas_totales;
+                      setMontoCuotaStr(String(Math.round(cVal * 100) / 100).replace('.', ','));
+                    }
+                  }
+                }}
+              />
+            </label>
+            <label className="block">
+              <span className="label">Fecha compra</span>
+              <input
+                id="edit-fecha"
+                type="date"
+                className={input}
+                value={f.fecha_compra}
+                onChange={(e) => { set('fecha_compra', e.target.value); if (e.target.value) recalc(e.target.value, f.cuenta_id); }}
+              />
+            </label>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <label className="block">
             <span className="label">Cuotas totales</span>
-            <input id="edit-cuotas" type="number" min={1} className={`${input} num`} value={f.cuotas_totales} onChange={(e) => set('cuotas_totales', Math.max(1, Number(e.target.value) || 1))} />
+            <input
+              id="edit-cuotas"
+              type="number"
+              min={1}
+              className={`${input} num`}
+              value={f.cuotas_totales}
+              onChange={(e) => {
+                const newCuotas = Math.max(1, Number(e.target.value) || 1);
+                set('cuotas_totales', newCuotas);
+                if (modoMonto === 'cuota' && newCuotas > 1) {
+                  const cVal = parseAmount(montoCuotaStr);
+                  setMontoStr(String(Math.round(cVal * newCuotas * 100) / 100).replace('.', ','));
+                } else if (total > 0) {
+                  setMontoCuotaStr(String(Math.round((total / newCuotas) * 100) / 100).replace('.', ','));
+                }
+              }}
+            />
           </label>
           <label className="block">
             <span className="label">Empieza en cuota</span>

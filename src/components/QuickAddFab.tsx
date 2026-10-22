@@ -35,6 +35,7 @@ export default function QuickAddFab() {
   const [mesPrimera, setMesPrimera] = useState(() => todayISO().slice(0, 7));
   const [mesManual, setMesManual] = useState(false);
   const [field, setField] = useState<Field>('monto');
+  const [modoMonto, setModoMonto] = useState<'total' | 'cuota'>('total');
   const [status, setStatus] = useState<'idle' | 'saving' | 'ok' | 'queued' | 'error'>('idle');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -61,6 +62,7 @@ export default function QuickAddFab() {
     const p = parseExpense(v);
     setMonto(p.monto != null ? String(p.monto).replace('.', ',') : '');
     setCuotas(String(p.cuotas));
+    setModoMonto('total');
     setDescripcion(p.descripcion);
     setTipo(p.tipo);
     if (p.tipo === 'ingreso') setNaturaleza('fijo');
@@ -68,14 +70,29 @@ export default function QuickAddFab() {
     if (match) setCategoriaId(match.id);
   };
 
-  const total = monto ? parseAmount(monto) : 0;
+  const rawNum = monto ? parseAmount(monto) : 0;
   const n = Math.max(1, parseInt(cuotas || '1', 10) || 1);
+  const total = modoMonto === 'cuota' && n > 1 ? Math.round(rawNum * n * 100) / 100 : rawNum;
   const split = useMemo(() => (total > 0 ? splitInstallments(total, n) : null), [total, n]);
   const valid = total > 0 && descripcion.trim().length > 0;
   const enCuotas = n > 1 && tipo === 'egreso';
   const esCompartido = tipo === 'egreso' && naturaleza === 'compartido';
   const miMontoReal = esCompartido ? (total * (porcentajePropio / 100)) : total;
   const montoDiferencial = esCompartido ? (total * ((100 - porcentajePropio) / 100)) : 0;
+
+  const cambiarModoMonto = (nuevoModo: 'total' | 'cuota') => {
+    if (nuevoModo === modoMonto) return;
+    if (rawNum > 0 && n > 1) {
+      if (nuevoModo === 'cuota') {
+        const cVal = Math.round((rawNum / n) * 100) / 100;
+        setMonto(String(cVal).replace('.', ','));
+      } else {
+        const tVal = Math.round(rawNum * n * 100) / 100;
+        setMonto(String(tVal).replace('.', ','));
+      }
+    }
+    setModoMonto(nuevoModo);
+  };
 
   const touchedCuotas = useRef(false);
 
@@ -111,7 +128,7 @@ export default function QuickAddFab() {
 
   const reset = () => {
     setText(''); setMonto(''); setCuotas('1'); setDescripcion(''); setTipo('egreso'); setField('monto');
-    setNaturaleza('variable'); setPorcentajePropio(50); setPagadoPor('yo'); setCompartidoCon('');
+    setModoMonto('total'); setNaturaleza('variable'); setPorcentajePropio(50); setPagadoPor('yo'); setCompartidoCon('');
     setCategoriaId(null); setCuentaId(null); setMesManual(false);
   };
 
@@ -310,10 +327,51 @@ export default function QuickAddFab() {
               className="mt-3 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-pebble placeholder:text-jade/60 outline-none transition focus:border-cyan/60"
             />
 
-            {/* Display */}
-            <div className="mt-4 flex items-end justify-between gap-3">
+            {/* Selector de Modo: Total general vs Importe por cuota */}
+            <div className="mt-3.5 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1 rounded-xl bg-white/5 p-1 text-xs">
+                <button
+                  type="button"
+                  id="modo-monto-total"
+                  onClick={() => cambiarModoMonto('total')}
+                  className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                    modoMonto === 'total'
+                      ? 'bg-cyan/20 text-cyan font-bold shadow-sm'
+                      : 'text-jade hover:text-pebble'
+                  }`}
+                >
+                  Total general
+                </button>
+                <button
+                  type="button"
+                  id="modo-monto-cuota"
+                  onClick={() => cambiarModoMonto('cuota')}
+                  className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                    modoMonto === 'cuota'
+                      ? 'bg-cyan/20 text-cyan font-bold shadow-sm'
+                      : 'text-jade hover:text-pebble'
+                  }`}
+                >
+                  Importe por cuota
+                </button>
+              </div>
+
+              {modoMonto === 'cuota' && n > 1 && rawNum > 0 && (
+                <div className="text-right text-xs">
+                  <span className="text-jade text-[11px]">Total: </span>
+                  <span className="num font-bold text-pebble">{money(total)}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Display numérico */}
+            <div className="mt-2 flex items-end justify-between gap-3">
               <button onClick={() => setField('monto')} className="min-w-0 text-left" id="display-monto">
-                <p className="text-xs text-jade">Total</p>
+                <p className="text-xs text-jade">
+                  {modoMonto === 'cuota'
+                    ? (n > 1 ? `Importe por cuota (${n} cuotas)` : 'Importe de la cuota')
+                    : 'Total general'}
+                </p>
                 <p className={`num truncate text-3xl font-semibold sm:text-4xl ${field === 'monto' ? accent : 'text-pebble/70'}`}>
                   ${monto || '0'}
                   {field === 'monto' && <span className="ml-0.5 inline-block h-7 w-0.5 animate-pulse bg-cyan align-middle" />}
@@ -382,10 +440,18 @@ export default function QuickAddFab() {
             <p className="num mt-2 min-h-[1.25rem] text-xs text-jade">
               {split && n > 1 ? (
                 <>
-                  <span className="text-pebble">{n} cuotas de {money(split.cuota, true)}</span>
-                  {split.ultima !== split.cuota && <> · última {money(split.ultima, true)}</>}
+                  {modoMonto === 'cuota' ? (
+                    <span className="text-pebble font-medium">
+                      {n} cuotas de {money(rawNum, true)} → <span className="text-cyan font-bold">Total {money(total, true)}</span>
+                    </span>
+                  ) : (
+                    <span className="text-pebble">
+                      {n} cuotas de {money(split.cuota, true)}
+                      {split.ultima !== split.cuota && <> · última {money(split.ultima, true)}</>}
+                    </span>
+                  )}
                   {esCompartido && (
-                    <> · <span className="text-amber-300 font-medium">Tu cuota: {money(split.cuota * (porcentajePropio / 100), true)}</span></>
+                    <> · <span className="text-amber-300 font-medium">Tu cuota: {money((modoMonto === 'cuota' ? rawNum : split.cuota) * (porcentajePropio / 100), true)}</span></>
                   )}
                 </>
               ) : split && esCompartido ? (
@@ -411,7 +477,15 @@ export default function QuickAddFab() {
             </div>
 
             <button id="btn-guardar" onClick={save} disabled={!valid || status === 'saving'} className="btn-primary mt-3 w-full py-2.5 text-base sm:text-lg">
-              {status === 'saving' ? 'Guardando…' : status === 'ok' ? '✓ Guardado' : status === 'queued' ? '✓ Guardado offline' : status === 'error' ? 'Error · reintentar' : `Guardar ${split && n > 1 ? `en ${n} cuotas` : ''}`}
+              {status === 'saving'
+                ? 'Guardando…'
+                : status === 'ok'
+                ? '✓ Guardado'
+                : status === 'queued'
+                ? '✓ Guardado offline'
+                : status === 'error'
+                ? 'Error · reintentar'
+                : `Guardar ${split && n > 1 ? (modoMonto === 'cuota' ? `${n} cuotas de ${money(rawNum)}` : `en ${n} cuotas`) : ''}`}
             </button>
           </section>
         </div>
