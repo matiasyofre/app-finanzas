@@ -66,9 +66,44 @@ export default function TransactionEditor({
   const [editandoCuota, setEditandoCuota] = useState<{ nro: number; monto: number } | null>(null);
   const [aplicarAFuturas, setAplicarAFuturas] = useState(true);
 
-  // Cargar cronograma real de cuotas desde v_cronograma_cuotas
-  const loadCuotas = useCallback(async (transaccionId: string) => {
+  // Cargar cronograma real de cuotas (para cuotas o proyección de 24 meses si es fijo/recurrente)
+  const loadCuotas = useCallback(async (transaccionId: string, currentTx?: Transaccion | null) => {
     const sb = getSupabase();
+    const target = currentTx || tx;
+    const esFijoRec = target ? (target.naturaleza === 'fijo' || Boolean(target.es_recurrente)) : false;
+
+    // 1. Obtener posibles ajustes de cuotas manuales
+    const { data: customData } = await sb
+      .from('transacciones_cuotas')
+      .select('nro_cuota, monto_cuota, saldada')
+      .eq('transaccion_id', transaccionId);
+
+    const customMap = new Map((customData || []).map((x: any) => [x.nro_cuota, x]));
+
+    // 2. Si es fijo / recurrente (ingreso o egreso), proyectamos 24 meses continuos hacia adelante
+    if (esFijoRec && target) {
+      const startYM = (target.fecha_primera_cuota || target.fecha_compra || todayISO()).slice(0, 7);
+      const baseNominal = target.monto_cuota || target.monto_total || 0;
+      const pctPropio = (target.porcentaje_propio ?? (target.compartido_con ? 50 : 100)) / 100;
+      const list: CuotaDetalle[] = [];
+
+      for (let c = 1; c <= 24; c++) {
+        const cMes = addMonths(startYM, c - 1);
+        const override = customMap.get(c);
+        const nominal = override ? Number(override.monto_cuota) : baseNominal;
+        list.push({
+          nro_cuota: c,
+          mes: cMes,
+          monto_nominal: nominal,
+          monto_propio: nominal * pctPropio,
+          cuota_saldada: override ? Boolean(override.saldada) : Boolean(target.saldado),
+        });
+      }
+      setCuotasLista(list);
+      return;
+    }
+
+    // 3. Si es en cuotas tradicional (préstamo / tarjeta)
     const { data } = await sb
       .from('v_cronograma_cuotas')
       .select('nro_cuota, mes, monto_nominal, monto, cuota_saldada')
@@ -86,7 +121,7 @@ export default function TransactionEditor({
         })),
       );
     }
-  }, []);
+  }, [tx]);
 
   useEffect(() => {
     setF(tx);
@@ -95,12 +130,17 @@ export default function TransactionEditor({
     setEditandoCuota(null);
     setModoMonto('total');
     if (tx) {
-      setMontoStr(String(tx.monto_total).replace('.', ','));
+      const esItemFijo = tx.naturaleza === 'fijo' || Boolean(tx.es_recurrente);
       const cNom = tx.monto_cuota || (tx.cuotas_totales > 0 ? tx.monto_total / tx.cuotas_totales : tx.monto_total);
+      if (tx.tipo === 'ingreso' && esItemFijo && tx.monto_cuota > 0) {
+        setMontoStr(String(tx.monto_cuota).replace('.', ','));
+      } else {
+        setMontoStr(String(tx.monto_total).replace('.', ','));
+      }
       setMontoCuotaStr(String(Math.round(cNom * 100) / 100).replace('.', ','));
       setMes(tx.fecha_primera_cuota.slice(0, 7));
-      if (tx.cuotas_totales > 1 || tx.naturaleza === 'fijo' || tx.es_recurrente) {
-        loadCuotas(tx.id);
+      if (tx.cuotas_totales > 1 || esItemFijo) {
+        loadCuotas(tx.id, tx);
       }
     }
   }, [tx, loadCuotas]);
@@ -149,7 +189,7 @@ export default function TransactionEditor({
       },
       { onConflict: 'transaccion_id,nro_cuota' },
     );
-    await loadCuotas(f.id);
+    await loadCuotas(f.id, f);
     notifyChange();
     setBusy(false);
   };
@@ -169,9 +209,10 @@ export default function TransactionEditor({
         compartido_con: esComp ? (f.compartido_con?.trim() || null) : null,
         saldado: f.saldado ?? false,
         descripcion: f.descripcion.trim(),
-        monto_total: total,
-        cuotas_totales: f.cuotas_totales,
-        cuota_actual: Math.min(f.cuota_actual, f.cuotas_totales),
+        monto_total: esFijo && f.tipo === 'ingreso' ? total * Math.max(f.cuotas_totales, 12) : total,
+        monto_cuota: esFijo ? total : (modoMonto === 'cuota' ? parseAmount(montoCuotaStr) : (total / f.cuotas_totales)),
+        cuotas_totales: esFijo && f.tipo === 'ingreso' ? Math.max(f.cuotas_totales, 12) : f.cuotas_totales,
+        cuota_actual: Math.min(f.cuota_actual, esFijo && f.tipo === 'ingreso' ? Math.max(f.cuotas_totales, 12) : f.cuotas_totales),
         fecha_compra: f.fecha_compra,
         fecha_primera_cuota: `${mes}-01`,
         categoria_id: f.categoria_id,
@@ -220,7 +261,7 @@ export default function TransactionEditor({
         await sb.from('transacciones_cuotas').upsert(inserts, { onConflict: 'transaccion_id,nro_cuota' });
       }
 
-      await loadCuotas(f.id);
+      await loadCuotas(f.id, f);
       notifyChange();
       setEditandoCuota(null);
     } catch (e: unknown) {
@@ -291,6 +332,7 @@ export default function TransactionEditor({
                 onClick={() => {
                   set('es_recurrente', false);
                   set('naturaleza', esComp ? 'compartido' : 'variable');
+                  if (tx) loadCuotas(tx.id, { ...f, es_recurrente: false, naturaleza: esComp ? 'compartido' : 'variable' });
                 }}
                 className={`flex-1 rounded-lg py-1.5 transition ${
                   !esFijo ? 'bg-white/15 text-pebble font-bold shadow-sm' : 'text-jade hover:text-pebble'
@@ -303,6 +345,7 @@ export default function TransactionEditor({
                 onClick={() => {
                   set('es_recurrente', true);
                   set('naturaleza', 'fijo');
+                  if (tx) loadCuotas(tx.id, { ...f, es_recurrente: true, naturaleza: 'fijo' });
                 }}
                 className={`flex-1 rounded-lg py-1.5 transition ${
                   esFijo ? 'bg-teal/40 text-cyan font-bold shadow-sm' : 'text-jade hover:text-pebble'
@@ -335,6 +378,44 @@ export default function TransactionEditor({
               <span>Compartido</span>
               {esComp && <span className="ml-0.5 text-amber-300">✓</span>}
             </button>
+          </div>
+        )}
+
+        {/* Clasificación para Ingresos: Recurrente mensual vs Puntual */}
+        {f.tipo === 'ingreso' && (
+          <div className="flex gap-2">
+            <div className="flex flex-1 gap-1 rounded-xl bg-white/5 p-1 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  set('es_recurrente', true);
+                  set('naturaleza', 'fijo');
+                  if (tx) loadCuotas(tx.id, { ...f, es_recurrente: true, naturaleza: 'fijo' });
+                }}
+                className={`flex-1 rounded-lg py-2 transition flex items-center justify-center gap-1.5 ${
+                  esFijo ? 'bg-income/20 text-income font-bold border border-income/30 shadow-sm' : 'text-jade hover:text-pebble'
+                }`}
+              >
+                <span>🔁</span>
+                <span>Recurrente mensual (para adelante)</span>
+                {esFijo && <span className="ml-0.5 text-income font-bold">✓</span>}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  set('es_recurrente', false);
+                  set('naturaleza', 'variable');
+                  if (tx) loadCuotas(tx.id, { ...f, es_recurrente: false, naturaleza: 'variable' });
+                }}
+                className={`flex-1 rounded-lg py-2 transition flex items-center justify-center gap-1.5 ${
+                  !esFijo ? 'bg-white/15 text-pebble font-bold shadow-sm' : 'text-jade hover:text-pebble'
+                }`}
+              >
+                <span>⚡</span>
+                <span>Puntual (solo este mes)</span>
+                {!esFijo && <span className="ml-0.5 text-pebble font-bold">✓</span>}
+              </button>
+            </div>
           </div>
         )}
 
@@ -434,7 +515,9 @@ export default function TransactionEditor({
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className="label">
-                {modoMonto === 'cuota' && f.cuotas_totales > 1 ? 'Importe por cuota' : 'Monto total'}
+                {f.tipo === 'ingreso' && esFijo
+                  ? 'Ingreso mensual'
+                  : (modoMonto === 'cuota' && f.cuotas_totales > 1 ? 'Importe por cuota' : 'Monto total')}
               </span>
               <input
                 id="edit-monto"
@@ -470,32 +553,47 @@ export default function TransactionEditor({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <label className="block">
-            <span className="label">Cuotas totales</span>
-            <input
-              id="edit-cuotas"
-              type="number"
-              min={1}
-              className={`${input} num`}
-              value={f.cuotas_totales}
-              onChange={(e) => {
-                const newCuotas = Math.max(1, Number(e.target.value) || 1);
-                set('cuotas_totales', newCuotas);
-                if (modoMonto === 'cuota' && newCuotas > 1) {
-                  const cVal = parseAmount(montoCuotaStr);
-                  setMontoStr(String(Math.round(cVal * newCuotas * 100) / 100).replace('.', ','));
-                } else if (total > 0) {
-                  setMontoCuotaStr(String(Math.round((total / newCuotas) * 100) / 100).replace('.', ','));
-                }
-              }}
-            />
-          </label>
-          <label className="block">
-            <span className="label">Empieza en cuota</span>
-            <input id="edit-cuota-actual" type="number" min={1} max={f.cuotas_totales} className={`${input} num`} value={f.cuota_actual} onChange={(e) => set('cuota_actual', Math.max(1, Number(e.target.value) || 1))} />
-          </label>
-        </div>
+        {f.tipo === 'ingreso' && esFijo ? (
+          <div className="rounded-xl border border-income/30 bg-income/5 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-income">🔁 Proyección mensual hacia adelante</span>
+              <span className="text-[11px] text-jade">Ingreso continuo</span>
+            </div>
+            <p className="text-xs text-pebble">
+              Se registrará un ingreso de <strong className="text-income">{money(total)}</strong> todos los meses a partir de <strong>{ymLabel(mes)}</strong>.
+            </p>
+            <p className="text-[11px] text-jade">
+              💡 Podés programar aumentos futuros o ajustes tocando <strong>&quot;Ver meses&quot;</strong> en la sección de ajuste de abajo.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="label">Cuotas totales</span>
+              <input
+                id="edit-cuotas"
+                type="number"
+                min={1}
+                className={`${input} num`}
+                value={f.cuotas_totales}
+                onChange={(e) => {
+                  const newCuotas = Math.max(1, Number(e.target.value) || 1);
+                  set('cuotas_totales', newCuotas);
+                  if (modoMonto === 'cuota' && newCuotas > 1) {
+                    const cVal = parseAmount(montoCuotaStr);
+                    setMontoStr(String(Math.round(cVal * newCuotas * 100) / 100).replace('.', ','));
+                  } else if (total > 0) {
+                    setMontoCuotaStr(String(Math.round((total / newCuotas) * 100) / 100).replace('.', ','));
+                  }
+                }}
+              />
+            </label>
+            <label className="block">
+              <span className="label">Empieza en cuota</span>
+              <input id="edit-cuota-actual" type="number" min={1} max={f.cuotas_totales} className={`${input} num`} value={f.cuota_actual} onChange={(e) => set('cuota_actual', Math.max(1, Number(e.target.value) || 1))} />
+            </label>
+          </div>
+        )}
 
         <label className="block">
           <span className="label">Medio de pago / Préstamo / Tarjeta</span>
@@ -541,12 +639,12 @@ export default function TransactionEditor({
               <div>
                 <p className="text-xs font-semibold text-pebble">
                   {f.naturaleza === 'fijo' || f.es_recurrente
-                    ? 'Ajuste mensual por inflación / tarifa'
+                    ? (f.tipo === 'ingreso' ? 'Ajuste de ingresos futuros / aumentos' : 'Ajuste mensual por inflación / tarifa')
                     : 'Ajuste de cuotas por inflación / tasa'}
                 </p>
                 <p className="text-[11px] text-jade">
                   {f.naturaleza === 'fijo' || f.es_recurrente
-                    ? 'Podés variar el importe de un mes sin alterar los meses anteriores'
+                    ? (f.tipo === 'ingreso' ? 'Podés variar el importe de un mes futuro sin alterar meses pasados' : 'Podés variar el importe de un mes sin alterar los meses anteriores')
                     : 'Permite cambiar el importe futuro sin alterar meses pasados'}
                 </p>
               </div>
@@ -581,10 +679,16 @@ export default function TransactionEditor({
                         }`}
                       >
                         <div>
-                          <span className="font-semibold text-pebble">Cuota {c.nro_cuota}</span>
-                          <span className="ml-2 text-jade">{ymLabel(c.mes)}</span>
+                          <span className="font-semibold text-pebble">
+                            {f.naturaleza === 'fijo' || f.es_recurrente ? ymLabel(c.mes) : `Cuota ${c.nro_cuota}`}
+                          </span>
+                          {!(f.naturaleza === 'fijo' || f.es_recurrente) && (
+                            <span className="ml-2 text-jade">{ymLabel(c.mes)}</span>
+                          )}
                           {estaSaldada ? (
-                            <span className="ml-2 text-[10px] text-income font-bold">✓ Saldada</span>
+                            <span className="ml-2 text-[10px] text-income font-bold">
+                              {f.tipo === 'ingreso' ? '✓ Cobrado' : '✓ Saldada'}
+                            </span>
                           ) : esActual ? (
                             <span className="ml-2 text-[10px] text-cyan font-bold">(Mes actual)</span>
                           ) : esPasada ? (
@@ -595,13 +699,13 @@ export default function TransactionEditor({
                           <span className="num font-bold text-pebble">{money(c.monto_nominal)}</span>
                           <button
                             type="button"
-                            title={estaSaldada ? 'Marcar pendiente' : 'Marcar pagada/cobrada'}
+                            title={estaSaldada ? 'Marcar pendiente' : f.tipo === 'ingreso' ? 'Marcar cobrado' : 'Marcar pagada'}
                             onClick={() => toggleCuotaSaldada(c.nro_cuota, Boolean(c.cuota_saldada))}
                             className={`rounded px-1.5 py-0.5 text-[10px] ${
                               estaSaldada ? 'bg-income/20 text-income' : 'bg-white/10 text-jade hover:text-pebble'
                             }`}
                           >
-                            {estaSaldada ? '✓' : 'Saldar'}
+                            {estaSaldada ? '✓' : f.tipo === 'ingreso' ? 'Cobrar' : 'Saldar'}
                           </button>
                           <button
                             type="button"

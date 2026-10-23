@@ -141,8 +141,8 @@ export default function QuickAddFab() {
         monto_total: total,
         cuotas_totales: n,
         tipo,
-        naturaleza: tipo === 'ingreso' ? 'fijo' : (esFijo ? 'fijo' : (esCompartido ? 'compartido' : 'variable')),
-        es_recurrente: tipo === 'ingreso' ? true : esFijo,
+        naturaleza: tipo === 'ingreso' ? (esFijo ? 'fijo' : 'variable') : (esFijo ? 'fijo' : (esCompartido ? 'compartido' : 'variable')),
+        es_recurrente: tipo === 'ingreso' ? esFijo : esFijo,
         porcentaje_propio: esCompartido ? porcentajePropio : 100,
         pagado_por: esCompartido ? pagadoPor : 'yo',
         compartido_con: esCompartido ? (compartidoCon.trim() || null) : null,
@@ -244,6 +244,40 @@ export default function QuickAddFab() {
                   <span>Compartido</span>
                   {esCompartido && <span className="ml-0.5 text-amber-300">✓</span>}
                 </button>
+              </div>
+            )}
+
+            {/* Clasificación para Ingresos: Recurrente vs Puntual */}
+            {tipo === 'ingreso' && (
+              <div className="mt-3 flex gap-2">
+                <div className="flex flex-1 gap-1 rounded-2xl bg-white/5 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setEsFijo(true)}
+                    className={`flex-1 rounded-xl py-1.5 text-xs transition flex items-center justify-center gap-1.5 ${
+                      esFijo
+                        ? 'bg-income/20 text-income font-semibold border border-income/30 shadow-sm'
+                        : 'text-jade hover:text-pebble'
+                    }`}
+                  >
+                    <span>🔁</span>
+                    <span>Recurrente mensual (para adelante)</span>
+                    {esFijo && <span className="ml-0.5 text-income font-bold">✓</span>}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEsFijo(false)}
+                    className={`flex-1 rounded-xl py-1.5 text-xs transition flex items-center justify-center gap-1.5 ${
+                      !esFijo
+                        ? 'bg-white/15 text-pebble font-semibold shadow-sm'
+                        : 'text-jade hover:text-pebble'
+                    }`}
+                  >
+                    <span>⚡</span>
+                    <span>Puntual (1 solo mes)</span>
+                    {!esFijo && <span className="ml-0.5 text-pebble font-bold">✓</span>}
+                  </button>
+                </div>
               </div>
             )}
 

@@ -53,6 +53,9 @@ function getMontoMes(t: Transaccion, targetYM: string, modo: ModoMonto = 'total'
 }
 
 function getSeccionTransaccion(t: Transaccion, ctaMap: Map<string, any>): string {
+  if (t.tipo === 'ingreso') {
+    return 'Ingresos';
+  }
   const cta = t.cuenta_id ? ctaMap.get(t.cuenta_id) : null;
   const ctaNombre = cta?.nombre?.toLowerCase() || '';
   const desc = t.descripcion.toLowerCase();
@@ -98,7 +101,6 @@ export default function ExcelMatrixGrid() {
     const { data } = await getSupabase()
       .from('transacciones')
       .select('id,tipo,naturaleza,porcentaje_propio,pagado_por,compartido_con,saldado,fecha_saldado,es_recurrente,descripcion,monto_total,monto_cuota,cuotas_totales,cuota_actual,fecha_compra,fecha_primera_cuota,categoria_id,cuenta_id')
-      .eq('tipo', 'egreso')
       .order('fecha_compra', { ascending: false });
 
     if (data) {
@@ -154,8 +156,8 @@ export default function ExcelMatrixGrid() {
     });
   }, [rows, q, ctaMap, catMap]);
 
-  // Agrupación por sección estilo Excel
-  const seccionOrder = ['Naranja X', 'Visa Galicia', 'Amex Galicia', 'Préstamos Banco', 'Gastos Fijos y Servicios'];
+  // Agrupación por sección estilo Excel (Ingresos primero, luego gastos por tarjeta/grupo)
+  const seccionOrder = ['Ingresos', 'Naranja X', 'Visa Galicia', 'Amex Galicia', 'Préstamos Banco', 'Gastos Fijos y Servicios'];
 
   const secciones = useMemo(() => {
     const map = new Map<string, Transaccion[]>();
@@ -196,14 +198,30 @@ export default function ExcelMatrixGrid() {
     });
   }, [incluirSimulaciones, simMovimientos, meses12, modo]);
 
-  // Gran total proyectado mensual (incluyendo opcionalmente simulaciones)
-  const granTotalMeses = useMemo(() => {
+  // Totales financieros proyectados mensuales (Ingresos, Egresos y Saldo Neto)
+  const totalesFinancieros = useMemo(() => {
     return meses12.map(({ ym }, idx) => {
-      const real = (filteredRows || []).reduce((sum, item) => sum + getMontoMes(item, ym, modo), 0);
+      const realIngresos = (filteredRows || [])
+        .filter((r) => r.tipo === 'ingreso')
+        .reduce((sum, item) => sum + getMontoMes(item, ym, modo), 0);
+      const realEgresos = (filteredRows || [])
+        .filter((r) => r.tipo === 'egreso')
+        .reduce((sum, item) => sum + getMontoMes(item, ym, modo), 0);
       const sim = simSubtotales[idx] || 0;
-      return real + sim;
+      const totalEgresos = realEgresos + sim;
+      const saldoNeto = realIngresos - totalEgresos;
+      return {
+        ingresos: realIngresos,
+        egresos: totalEgresos,
+        saldo: saldoNeto,
+      };
     });
   }, [filteredRows, meses12, modo, simSubtotales]);
+
+  // Gran total proyectado mensual (compatibilidad para egresos totales)
+  const granTotalMeses = useMemo(() => {
+    return totalesFinancieros.map((t) => t.egresos);
+  }, [totalesFinancieros]);
 
   const toggleSection = (nombre: string) => {
     setCollapsedSections((prev) => ({ ...prev, [nombre]: !prev[nombre] }));
@@ -275,14 +293,32 @@ export default function ExcelMatrixGrid() {
       ]);
     }
 
-    // Gran Total
+    // Totales Financieros
     dataRows.push([
+      'TOTALES',
+      'TOTAL INGRESOS (+)',
       '',
-      'TOTAL PROYECTADO',
+      '',
+      '',
+      ...totalesFinancieros.map((t) => Math.round(t.ingresos * 100) / 100),
+    ]);
+
+    dataRows.push([
+      'TOTALES',
+      'TOTAL EGRESOS (-)',
       '',
       '',
       '',
-      ...granTotalMeses.map((v) => Math.round(v * 100) / 100),
+      ...totalesFinancieros.map((t) => Math.round(t.egresos * 100) / 100),
+    ]);
+
+    dataRows.push([
+      'NETO',
+      'SALDO MENSUAL / CASHFLOW (=)',
+      '',
+      '',
+      '',
+      ...totalesFinancieros.map((t) => Math.round(t.saldo * 100) / 100),
     ]);
 
     const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
@@ -441,25 +477,32 @@ export default function ExcelMatrixGrid() {
               {rows &&
                 secciones.map((sec) => {
                   const isCollapsed = Boolean(collapsedSections[sec.nombre]);
+                  const esSecIngresos = sec.nombre === 'Ingresos';
                   return (
                     <Fragment key={sec.nombre}>
                       {/* Fila Encabezado / Subtotal de la Sección: 16 celdas exactas */}
                       <tr
                         onClick={() => toggleSection(sec.nombre)}
-                        className="bg-white/[0.04] text-pebble font-semibold cursor-pointer hover:bg-white/10 select-none transition border-y border-white/10"
+                        className={`${
+                          esSecIngresos
+                            ? 'bg-emerald-950/25 text-emerald-300 border-y border-emerald-500/25 hover:bg-emerald-950/35'
+                            : 'bg-white/[0.04] text-pebble font-semibold hover:bg-white/10 border-y border-white/10'
+                        } cursor-pointer select-none transition`}
                         title="Tocá para contraer o expandir la sección"
                       >
                         {/* Col 1: Sticky */}
                         <td className="sticky left-0 z-10 bg-spruce-950 px-3 py-2 text-xs border-r border-white/10 w-[140px] min-w-[140px] max-w-[140px] truncate">
-                          <span className="inline-flex items-center gap-1.5 text-teal">
+                          <span className={`inline-flex items-center gap-1.5 ${esSecIngresos ? 'text-emerald-400' : 'text-teal'}`}>
                             <span>{isCollapsed ? '▶' : '▼'}</span>
-                            <span className="font-bold text-pebble truncate">{sec.nombre}</span>
+                            <span className="font-bold truncate">{esSecIngresos ? '💰 Ingresos' : sec.nombre}</span>
                           </span>
                         </td>
                         {/* Col 2: Sticky */}
                         <td className="sticky left-[140px] z-10 bg-spruce-950 px-3 py-2 text-xs border-r border-white/10 w-[220px] min-w-[220px] max-w-[220px]">
                           <span className="inline-flex items-center gap-2">
-                            <span className="text-pebble/80 font-semibold truncate">Subtotal {sec.nombre}</span>
+                            <span className={`font-semibold truncate ${esSecIngresos ? 'text-emerald-300' : 'text-pebble/80'}`}>
+                              Subtotal {sec.nombre}
+                            </span>
                             <span className="rounded-full bg-white/10 px-1.5 py-0.2 text-[10px] text-jade font-normal shrink-0">
                               {sec.items.length}
                             </span>
@@ -476,11 +519,17 @@ export default function ExcelMatrixGrid() {
                           return (
                             <td
                               key={ym}
-                              className={`whitespace-nowrap px-3 py-2 text-right num text-xs font-bold text-pebble w-[105px] min-w-[105px] ${
-                                isCurrent ? 'bg-cyan/10 border-x border-cyan/20 text-cyan' : ''
+                              className={`whitespace-nowrap px-3 py-2 text-right num text-xs font-bold w-[105px] min-w-[105px] ${
+                                isCurrent
+                                  ? esSecIngresos
+                                    ? 'bg-emerald-500/20 text-emerald-300 border-x border-emerald-500/30'
+                                    : 'bg-cyan/10 border-x border-cyan/20 text-cyan'
+                                  : esSecIngresos
+                                  ? 'text-emerald-400'
+                                  : 'text-pebble'
                               }`}
                             >
-                              {val > 0 ? money(val) : '—'}
+                              {val > 0 ? `${esSecIngresos ? '+' : ''}${money(val)}` : '—'}
                             </td>
                           );
                         })}
@@ -489,6 +538,7 @@ export default function ExcelMatrixGrid() {
                       {/* Filas de Movimientos dentro de la sección */}
                       {!isCollapsed &&
                         sec.items.map((t) => {
+                          const esIngreso = t.tipo === 'ingreso';
                           const esF = isFijo(t);
                           const esC = isCompartido(t);
                           const esSofi = t.pagado_por === 'otro';
@@ -496,7 +546,9 @@ export default function ExcelMatrixGrid() {
 
                           let rowBorder = 'hover:bg-white/[0.04]';
                           let pillClass = 'bg-white/10 text-pebble';
-                          if (esSofi) {
+                          if (esIngreso) {
+                            rowBorder = 'bg-emerald-500/[0.02] hover:bg-emerald-500/[0.06]';
+                          } else if (esSofi) {
                             rowBorder = 'bg-amber-500/[0.03] hover:bg-amber-500/[0.08]';
                             pillClass = 'bg-amber-500/20 text-amber-300 border border-amber-400/30';
                           } else if (esVerde) {
@@ -519,13 +571,19 @@ export default function ExcelMatrixGrid() {
                               {/* Col 2: Detalle (Sticky) */}
                               <td className="sticky left-[140px] z-10 bg-spruce-950 group-hover:bg-spruce-900 px-3 py-2 border-r border-white/5 font-medium text-pebble w-[220px] min-w-[220px] max-w-[220px]">
                                 <div className="flex items-center gap-1.5 truncate">
+                                  {esIngreso && (
+                                    <span
+                                      className="h-2 w-2 rounded-full bg-emerald-400 shrink-0"
+                                      title="Ingreso"
+                                    />
+                                  )}
                                   {esSofi && (
                                     <span
                                       className="h-2 w-2 rounded-full bg-amber-400 shrink-0"
                                       title="Pagado por Sofi (por liquidar)"
                                     />
                                   )}
-                                  {esVerde && (
+                                  {esVerde && !esIngreso && (
                                     <span
                                       className="h-2 w-2 rounded-full bg-emerald-400 shrink-0"
                                       title="Saldado al día"
@@ -537,20 +595,28 @@ export default function ExcelMatrixGrid() {
                                 </div>
                               </td>
 
-                              {/* Col 3: Tipo (Fijo/Variable) */}
+                              {/* Col 3: Tipo (Fijo/Variable o Recurr/Puntual) */}
                               <td className="w-[65px] min-w-[65px] max-w-[65px] px-2 py-2 text-center whitespace-nowrap">
-                                <span
-                                  className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                                    esF ? 'bg-cyan/15 text-cyan' : 'bg-white/5 text-jade'
-                                  }`}
-                                >
-                                  {esF ? 'Fijo' : 'Var'}
-                                </span>
+                                {esIngreso ? (
+                                  <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-500/20 text-emerald-300">
+                                    {esF ? 'Recurr' : 'Puntual'}
+                                  </span>
+                                ) : (
+                                  <span
+                                    className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                                      esF ? 'bg-cyan/15 text-cyan' : 'bg-white/5 text-jade'
+                                    }`}
+                                  >
+                                    {esF ? 'Fijo' : 'Var'}
+                                  </span>
+                                )}
                               </td>
 
                               {/* Col 4: Compartido */}
                               <td className="w-[65px] min-w-[65px] max-w-[65px] px-2 py-2 text-center whitespace-nowrap">
-                                {esC ? (
+                                {esIngreso ? (
+                                  <span className="text-jade/30 text-[10px]">—</span>
+                                ) : esC ? (
                                   <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${pillClass}`}>
                                     {t.porcentaje_propio ?? 50}%
                                   </span>
@@ -567,10 +633,18 @@ export default function ExcelMatrixGrid() {
                                   <td
                                     key={ym}
                                     className={`whitespace-nowrap px-3 py-2 text-right num text-xs w-[105px] min-w-[105px] ${
-                                      isCurrent ? 'bg-cyan/[0.03] border-x border-cyan/15 font-semibold text-pebble' : ''
-                                    } ${val > 0 ? (esSofi ? 'text-amber-200/90' : 'text-pebble/90') : 'text-jade/30'}`}
+                                      isCurrent ? 'bg-cyan/[0.03] border-x border-cyan/15 font-semibold' : ''
+                                    } ${
+                                      val > 0
+                                        ? esIngreso
+                                          ? 'text-emerald-400 font-medium'
+                                          : esSofi
+                                          ? 'text-amber-200/90'
+                                          : 'text-pebble/90'
+                                        : 'text-jade/30'
+                                    }`}
                                   >
-                                    {val > 0 ? money(val) : '—'}
+                                    {val > 0 ? `${esIngreso ? '+' : ''}${money(val)}` : '—'}
                                   </td>
                                 );
                               })}
@@ -650,37 +724,100 @@ export default function ExcelMatrixGrid() {
                 </Fragment>
               )}
 
-              {/* FILA FINAL: TOTAL PROYECTADO (Exactamente 16 columnas) */}
+              {/* FILAS DE CIERRE FINANCIERO (Exactamente 16 columnas cada una) */}
               {rows && (
-                <tr className="border-t-2 border-teal/40 bg-teal/20 font-bold text-pebble sticky bottom-0 z-20 shadow-xl">
-                  {/* Col 1 */}
-                  <td className="sticky left-0 z-30 bg-spruce-950 px-3 py-3 border-r border-white/10 text-teal text-xs w-[140px] min-w-[140px] max-w-[140px] font-bold">
-                    TOTAL
-                  </td>
-                  {/* Col 2 */}
-                  <td className="sticky left-[140px] z-30 bg-spruce-950 px-3 py-3 border-r border-white/10 uppercase tracking-wide text-xs text-teal w-[220px] min-w-[220px] max-w-[220px] font-bold">
-                    TOTAL PROYECTADO
-                  </td>
-                  {/* Col 3 */}
-                  <td className="w-[65px] min-w-[65px] max-w-[65px] px-2 py-3 text-center text-jade text-[11px]">—</td>
-                  {/* Col 4 */}
-                  <td className="w-[65px] min-w-[65px] max-w-[65px] px-2 py-3 text-center text-jade text-[11px]">—</td>
-                  {/* Col 5..16 */}
-                  {meses12.map(({ ym }, idx) => {
-                    const total = granTotalMeses[idx];
-                    const isCurrent = idx === 0;
-                    return (
-                      <td
-                        key={ym}
-                        className={`whitespace-nowrap px-3 py-3 text-right num text-xs md:text-sm font-bold w-[105px] min-w-[105px] ${
-                          isCurrent ? 'bg-teal/40 text-cyan border-x border-teal/40 font-extrabold' : 'text-pebble'
-                        }`}
-                      >
-                        {total > 0 ? money(total) : '—'}
-                      </td>
-                    );
-                  })}
-                </tr>
+                <>
+                  {/* Fila 1: Total Ingresos */}
+                  <tr className="border-t-2 border-emerald-500/30 bg-emerald-950/20 font-semibold text-emerald-200">
+                    <td className="sticky left-0 z-20 bg-spruce-950 px-3 py-2.5 border-r border-white/10 text-emerald-400 text-xs w-[140px] min-w-[140px] max-w-[140px] font-bold">
+                      INGRESOS
+                    </td>
+                    <td className="sticky left-[140px] z-20 bg-spruce-950 px-3 py-2.5 border-r border-white/10 uppercase tracking-wide text-xs text-emerald-300 w-[220px] min-w-[220px] max-w-[220px] font-bold">
+                      TOTAL INGRESOS (+)
+                    </td>
+                    <td className="w-[65px] min-w-[65px] max-w-[65px] px-2 py-2 text-center text-jade/40 text-[11px]">—</td>
+                    <td className="w-[65px] min-w-[65px] max-w-[65px] px-2 py-2 text-center text-jade/40 text-[11px]">—</td>
+                    {meses12.map(({ ym }, idx) => {
+                      const totalIng = totalesFinancieros[idx]?.ingresos || 0;
+                      const isCurrent = idx === 0;
+                      return (
+                        <td
+                          key={ym}
+                          className={`whitespace-nowrap px-3 py-2 text-right num text-xs font-bold text-emerald-400 w-[105px] min-w-[105px] ${
+                            isCurrent ? 'bg-emerald-500/15 border-x border-emerald-500/25 text-emerald-300' : ''
+                          }`}
+                        >
+                          {totalIng > 0 ? `+${money(totalIng)}` : '—'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+
+                  {/* Fila 2: Total Gastos / Egresos */}
+                  <tr className="border-t border-white/10 bg-spruce-950/80 font-semibold text-pebble">
+                    <td className="sticky left-0 z-20 bg-spruce-950 px-3 py-2.5 border-r border-white/10 text-rose-400 text-xs w-[140px] min-w-[140px] max-w-[140px] font-bold">
+                      EGRESOS
+                    </td>
+                    <td className="sticky left-[140px] z-20 bg-spruce-950 px-3 py-2.5 border-r border-white/10 uppercase tracking-wide text-xs text-rose-300 w-[220px] min-w-[220px] max-w-[220px] font-bold">
+                      TOTAL EGRESOS (-)
+                    </td>
+                    <td className="w-[65px] min-w-[65px] max-w-[65px] px-2 py-2 text-center text-jade/40 text-[11px]">—</td>
+                    <td className="w-[65px] min-w-[65px] max-w-[65px] px-2 py-2 text-center text-jade/40 text-[11px]">—</td>
+                    {meses12.map(({ ym }, idx) => {
+                      const totalEg = totalesFinancieros[idx]?.egresos || 0;
+                      const isCurrent = idx === 0;
+                      return (
+                        <td
+                          key={ym}
+                          className={`whitespace-nowrap px-3 py-2 text-right num text-xs font-bold text-pebble w-[105px] min-w-[105px] ${
+                            isCurrent ? 'bg-cyan/10 border-x border-cyan/20 text-cyan' : ''
+                          }`}
+                        >
+                          {totalEg > 0 ? `-${money(totalEg)}` : '—'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+
+                  {/* Fila 3: Saldo Neto / Cashflow (Sticky al final) */}
+                  <tr className="border-t-2 border-teal/40 bg-teal/20 font-bold text-pebble sticky bottom-0 z-20 shadow-2xl backdrop-blur-md">
+                    <td className="sticky left-0 z-30 bg-spruce-950 px-3 py-3 border-r border-white/10 text-teal text-xs w-[140px] min-w-[140px] max-w-[140px] font-bold">
+                      SALDO
+                    </td>
+                    <td className="sticky left-[140px] z-30 bg-spruce-950 px-3 py-3 border-r border-white/10 uppercase tracking-wide text-xs text-teal w-[220px] min-w-[220px] max-w-[220px] font-bold">
+                      SALDO / CASHFLOW (=)
+                    </td>
+                    <td className="w-[65px] min-w-[65px] max-w-[65px] px-2 py-3 text-center text-jade text-[11px]">—</td>
+                    <td className="w-[65px] min-w-[65px] max-w-[65px] px-2 py-3 text-center text-jade text-[11px]">—</td>
+                    {meses12.map(({ ym }, idx) => {
+                      const saldo = totalesFinancieros[idx]?.saldo || 0;
+                      const isCurrent = idx === 0;
+                      const esPositivo = saldo >= 0;
+                      return (
+                        <td
+                          key={ym}
+                          className={`whitespace-nowrap px-2.5 py-3 text-right num text-xs md:text-sm font-extrabold w-[105px] min-w-[105px] ${
+                            isCurrent ? 'bg-teal/30 border-x border-teal/40' : ''
+                          }`}
+                        >
+                          {saldo !== 0 ? (
+                            <span
+                              className={`inline-block rounded-md px-1.5 py-0.5 text-xs font-bold ${
+                                esPositivo
+                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                  : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                              }`}
+                            >
+                              {esPositivo ? `+${money(saldo)}` : `-${money(Math.abs(saldo))}`}
+                            </span>
+                          ) : (
+                            <span className="text-jade/40">—</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </>
               )}
             </tbody>
           </table>
