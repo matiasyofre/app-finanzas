@@ -91,6 +91,7 @@ export default function MovimientosGrid() {
   const [editing, setEditing] = useState<Transaccion | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mostrarDeudaTotal, setMostrarDeudaTotal] = useState(false);
+  const [mostrarDesgloseCompartidos, setMostrarDesgloseCompartidos] = useState(false);
   const [modoMontoGrid, setModoMontoGrid] = useState<'cuota' | 'total'>('cuota');
   const [vista, setVista] = useState<'lista' | 'matriz'>('lista');
   const [cuotasOverrides, setCuotasOverrides] = useState<Map<string, number>>(new Map());
@@ -99,6 +100,8 @@ export default function MovimientosGrid() {
     try {
       const saved = localStorage.getItem('gastos:mostrar-deuda-total');
       if (saved === 'true') setMostrarDeudaTotal(true);
+      const savedDesglose = localStorage.getItem('gastos:mostrar-desglose-compartidos');
+      if (savedDesglose === 'true') setMostrarDesgloseCompartidos(true);
       const savedModo = localStorage.getItem('gastos:modo-monto-grid');
       if (savedModo === 'total' || savedModo === 'cuota') setModoMontoGrid(savedModo);
     } catch {}
@@ -445,6 +448,21 @@ export default function MovimientosGrid() {
               />
               <span className="font-medium">Sumar cuotas futuras</span>
             </label>
+
+            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-pebble transition hover:bg-white/10 select-none">
+              <input
+                type="checkbox"
+                checked={mostrarDesgloseCompartidos}
+                onChange={(e) => {
+                  setMostrarDesgloseCompartidos(e.target.checked);
+                  try {
+                    localStorage.setItem('gastos:mostrar-desglose-compartidos', String(e.target.checked));
+                  } catch {}
+                }}
+                className="h-4 w-4 rounded border-white/20 bg-white/10 text-teal accent-teal focus:ring-0 cursor-pointer"
+              />
+              <span className="font-medium">Desglosar a cobrar / debés</span>
+            </label>
           </div>
         )}
       </div>
@@ -502,7 +520,11 @@ export default function MovimientosGrid() {
           </div>
 
       {/* Tarjetas resumen superiores */}
-      <div className={`grid gap-3 ${mostrarDeudaTotal ? 'grid-cols-2 lg:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4'}`}>
+      <div className={`grid gap-3 ${
+        mostrarDesgloseCompartidos
+          ? (mostrarDeudaTotal ? 'grid-cols-2 lg:grid-cols-6' : 'grid-cols-2 lg:grid-cols-5')
+          : (mostrarDeudaTotal ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-2 lg:grid-cols-3')
+      }`}>
         <div className="glass animate-rise p-4">
           <p className="label text-[11px]">Egresos del mes</p>
           <p className="num mt-1 text-2xl font-bold text-debt">-{money(stats.mes.egresos)}</p>
@@ -513,16 +535,99 @@ export default function MovimientosGrid() {
           <p className="num mt-1 text-2xl font-bold text-income">+{money(stats.mes.ingresos)}</p>
           <p className="text-[11px] text-jade">ingresado en el mes</p>
         </div>
-        <div className="glass animate-rise p-4 [animation-delay:120ms]">
-          <p className="label text-[11px]">Te deben (este mes)</p>
-          <p className="num mt-1 text-2xl font-bold text-income">{money(stats.mes.pendientesCobro)}</p>
-          <p className="text-[11px] text-jade">por gastos que pagaste vos</p>
-        </div>
-        <div className="glass animate-rise p-4 [animation-delay:180ms]">
-          <p className="label text-[11px]">Debés (este mes)</p>
-          <p className="num mt-1 text-2xl font-bold text-debt">{money(stats.mes.pendientesPago)}</p>
-          <p className="text-[11px] text-jade">por gastos que pagó otro</p>
-        </div>
+
+        {/* Card Neteada: Saldo a cobrar si me deben o Saldo a pagar si debo */}
+        {(() => {
+          const saldoNeto = stats.mes.pendientesCobro - stats.mes.pendientesPago;
+          const esCobrar = saldoNeto > 0;
+          const esPagar = saldoNeto < 0;
+
+          return (
+            <div
+              className={`glass animate-rise p-4 [animation-delay:120ms] ${
+                !mostrarDesgloseCompartidos && !mostrarDeudaTotal ? 'col-span-2 lg:col-span-1' : ''
+              } ${
+                esCobrar
+                  ? 'border-emerald-500/30 bg-emerald-500/5'
+                  : esPagar
+                  ? 'border-rose-500/30 bg-rose-500/5'
+                  : 'border-white/10'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-1">
+                <p className={`label text-[11px] ${esCobrar ? 'text-emerald-300' : esPagar ? 'text-rose-300' : ''}`}>
+                  {esCobrar ? 'Saldo a cobrar (este mes)' : esPagar ? 'Saldo a pagar (este mes)' : 'Saldo compartido'}
+                </p>
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${
+                      esCobrar
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        : esPagar
+                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                        : 'bg-white/10 text-pebble'
+                    }`}
+                  >
+                    {esCobrar ? 'A cobrar' : esPagar ? 'A pagar' : 'Al día'}
+                  </span>
+                  <label
+                    title={mostrarDesgloseCompartidos ? 'Ocultar desglose detallado' : 'Ver desglose individual (Te deben y Debés)'}
+                    className="flex items-center gap-1 cursor-pointer rounded bg-white/5 hover:bg-white/10 px-1.5 py-0.5 text-[9px] text-jade hover:text-pebble transition border border-white/10 select-none"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={mostrarDesgloseCompartidos}
+                      onChange={(e) => {
+                        setMostrarDesgloseCompartidos(e.target.checked);
+                        try {
+                          localStorage.setItem('gastos:mostrar-desglose-compartidos', String(e.target.checked));
+                        } catch {}
+                      }}
+                      className="h-2.5 w-2.5 rounded border-white/20 bg-white/10 text-teal accent-teal focus:ring-0 cursor-pointer"
+                    />
+                    <span className="hidden sm:inline">Desglose</span>
+                  </label>
+                </div>
+              </div>
+              <p
+                className={`num mt-1 text-2xl font-bold ${
+                  esCobrar ? 'text-income' : esPagar ? 'text-debt' : 'text-pebble'
+                }`}
+              >
+                {esCobrar ? `+${money(saldoNeto)}` : esPagar ? `-${money(Math.abs(saldoNeto))}` : money(0)}
+              </p>
+              <p className="text-[11px] text-jade">
+                {esCobrar
+                  ? `a favor (te deben ${money(stats.mes.pendientesCobro)} vs debés ${money(stats.mes.pendientesPago)})`
+                  : esPagar
+                  ? `a pagar (debés ${money(stats.mes.pendientesPago)} vs te deben ${money(stats.mes.pendientesCobro)})`
+                  : 'cuentas compartidas al día'}
+              </p>
+            </div>
+          );
+        })()}
+
+        {/* Cards opcionales de desglose: Te deben y Debés (activables por tilde) */}
+        {mostrarDesgloseCompartidos && (
+          <>
+            <div className="glass animate-rise p-4 [animation-delay:150ms] border-emerald-500/20">
+              <div className="flex items-center justify-between">
+                <p className="label text-[11px]">Te deben (este mes)</p>
+                <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-300">Detalle</span>
+              </div>
+              <p className="num mt-1 text-2xl font-bold text-income">{money(stats.mes.pendientesCobro)}</p>
+              <p className="text-[11px] text-jade">por gastos que pagaste vos</p>
+            </div>
+            <div className="glass animate-rise p-4 [animation-delay:180ms] border-rose-500/20">
+              <div className="flex items-center justify-between">
+                <p className="label text-[11px]">Debés (este mes)</p>
+                <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-rose-300">Detalle</span>
+              </div>
+              <p className="num mt-1 text-2xl font-bold text-debt">{money(stats.mes.pendientesPago)}</p>
+              <p className="text-[11px] text-jade">por gastos que pagó otro</p>
+            </div>
+          </>
+        )}
 
         {/* Card actual donde sumariza todo (activable / desactivable según tilde) */}
         {mostrarDeudaTotal && (
