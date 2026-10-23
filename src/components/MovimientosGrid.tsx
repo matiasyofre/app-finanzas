@@ -426,12 +426,52 @@ export default function MovimientosGrid() {
         <ExcelMatrixGrid />
       ) : (
         <>
-          {/* Encabezado del Resumen */}
-          <div className="flex items-center gap-2">
-            <p className="label text-[11px]">Resumen de movimientos</p>
-            <span className="rounded-full bg-teal/15 px-2.5 py-0.5 text-[11px] font-semibold text-cyan">
-              📅 {stats.mesReferencia === currentYM ? 'Mes actual' : 'Mes seleccionado'}: {monthLabel(stats.mesReferencia + '-01', { month: 'long', year: 'numeric' })}
-            </span>
+          {/* Encabezado del Resumen con navegación de meses */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <p className="label text-[11px]">Resumen de movimientos</p>
+              <div className="flex items-center gap-1 bg-white/5 rounded-full p-0.5 border border-white/10">
+                <button
+                  type="button"
+                  id="btn-mes-anterior"
+                  onClick={() => {
+                    const prevYM = addMonths(stats.mesReferencia, -1);
+                    setPeriodo(prevYM);
+                  }}
+                  className="rounded-full px-2 py-0.5 text-xs text-jade hover:text-pebble hover:bg-white/10 transition"
+                  title="Mes anterior"
+                >
+                  ◀
+                </button>
+                <span className="rounded-full bg-teal/15 px-2.5 py-0.5 text-[11px] font-semibold text-cyan">
+                  📅 {stats.mesReferencia === currentYM ? 'Mes actual' : 'Mes seleccionado'}: {monthLabel(stats.mesReferencia + '-01', { month: 'long', year: 'numeric' })}
+                </span>
+                <button
+                  type="button"
+                  id="btn-mes-siguiente"
+                  onClick={() => {
+                    const nextYM = addMonths(stats.mesReferencia, 1);
+                    setPeriodo(nextYM);
+                  }}
+                  className="rounded-full px-2 py-0.5 text-xs text-jade hover:text-pebble hover:bg-white/10 transition"
+                  title="Mes siguiente"
+                >
+                  ▶
+                </button>
+              </div>
+            </div>
+
+            {periodo !== 'vigentes' && (
+              <button
+                type="button"
+                id="btn-volver-mes-actual"
+                onClick={() => setPeriodo('vigentes')}
+                className="text-[11px] font-medium text-teal hover:underline flex items-center gap-1"
+              >
+                <span>↩</span>
+                <span>Volver al mes actual</span>
+              </button>
+            )}
           </div>
 
       {/* Tarjetas resumen superiores */}
