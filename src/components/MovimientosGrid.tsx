@@ -42,12 +42,18 @@ export function isCompartido(t: {
 }
 
 /** Devuelve el monto neto que impacta exclusivamente en un mes específico ("YYYY-MM"). */
-function getMontoMes(t: Transaccion, targetYM: string): number {
+function getMontoMes(t: Transaccion, targetYM: string, cuotasOverrides?: Map<string, number>): number {
   const startYM = (t.fecha_primera_cuota || t.fecha_compra).slice(0, 7);
   const esFijo = isFijo(t);
 
   if (esFijo) {
     if (startYM <= targetYM) {
+      const diff = monthDiff(startYM, targetYM);
+      const nroCuota = diff + 1;
+      const customKey = `${t.id}:${nroCuota}`;
+      if (cuotasOverrides && cuotasOverrides.has(customKey)) {
+        return cuotasOverrides.get(customKey)!;
+      }
       return t.monto_cuota || t.monto_total;
     }
     return 0;
@@ -57,6 +63,10 @@ function getMontoMes(t: Transaccion, targetYM: string): number {
     const diff = monthDiff(startYM, targetYM);
     const nroCuota = t.cuota_actual + diff;
     if (nroCuota >= t.cuota_actual && nroCuota <= t.cuotas_totales) {
+      const customKey = `${t.id}:${nroCuota}`;
+      if (cuotasOverrides && cuotasOverrides.has(customKey)) {
+        return cuotasOverrides.get(customKey)!;
+      }
       if (nroCuota === t.cuotas_totales) {
         const resto = t.monto_total - (t.monto_cuota * (t.cuotas_totales - 1));
         return resto > 0 ? resto : (t.monto_cuota || (t.monto_total / t.cuotas_totales));
@@ -83,6 +93,7 @@ export default function MovimientosGrid() {
   const [mostrarDeudaTotal, setMostrarDeudaTotal] = useState(false);
   const [modoMontoGrid, setModoMontoGrid] = useState<'cuota' | 'total'>('cuota');
   const [vista, setVista] = useState<'lista' | 'matriz'>('lista');
+  const [cuotasOverrides, setCuotasOverrides] = useState<Map<string, number>>(new Map());
 
   useEffect(() => {
     try {
@@ -96,15 +107,31 @@ export default function MovimientosGrid() {
   const currentYM = todayISO().slice(0, 7);
 
   const load = useCallback(async () => {
-    const { data, error } = await getSupabase()
-      .from('transacciones')
-      .select('id,tipo,naturaleza,porcentaje_propio,pagado_por,compartido_con,saldado,fecha_saldado,es_recurrente,descripcion,monto_total,monto_cuota,cuotas_totales,cuota_actual,fecha_compra,fecha_primera_cuota,categoria_id,cuenta_id')
-      .order('fecha_compra', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(1000);
-    if (error) return setError(error.message);
+    const sb = getSupabase();
+    const [txRes, cuotasRes] = await Promise.all([
+      sb
+        .from('transacciones')
+        .select('id,tipo,naturaleza,porcentaje_propio,pagado_por,compartido_con,saldado,fecha_saldado,es_recurrente,descripcion,monto_total,monto_cuota,cuotas_totales,cuota_actual,fecha_compra,fecha_primera_cuota,categoria_id,cuenta_id')
+        .order('fecha_compra', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(1000),
+      sb
+        .from('transacciones_cuotas')
+        .select('transaccion_id,nro_cuota,monto_cuota'),
+    ]);
+
+    if (txRes.error) return setError(txRes.error.message);
+
+    if (cuotasRes.data) {
+      const map = new Map<string, number>();
+      for (const c of cuotasRes.data) {
+        map.set(`${c.transaccion_id}:${c.nro_cuota}`, Number(c.monto_cuota));
+      }
+      setCuotasOverrides(map);
+    }
+
     setRows(
-      ((data ?? []) as Transaccion[]).map((r) => ({
+      ((txRes.data ?? []) as Transaccion[]).map((r) => ({
         ...r,
         monto_total: Number(r.monto_total),
         monto_cuota: Number(r.monto_cuota),
@@ -265,7 +292,7 @@ export default function MovimientosGrid() {
       const partePropiaPct = (t.porcentaje_propio ?? (esComp ? 50 : 100)) / 100;
 
       // 1. IMPACTO EN EL MES (Mes en curso o mes seleccionado)
-      const montoMes = getMontoMes(t, mesReferencia);
+      const montoMes = getMontoMes(t, mesReferencia, cuotasOverrides);
       if (montoMes > 0) {
         const partePropiaMes = esComp ? (montoMes * partePropiaPct) : montoMes;
         if (t.tipo === 'ingreso') {
@@ -325,7 +352,7 @@ export default function MovimientosGrid() {
       },
       mesReferencia,
     };
-  }, [visibles, periodo, currentYM]);
+  }, [visibles, periodo, currentYM, cuotasOverrides]);
 
   if (error) return <div className="glass p-6 text-sm text-debt">{error}</div>;
 
@@ -664,10 +691,11 @@ export default function MovimientosGrid() {
                 const esComp = isCompartido(t);
                 const esFijo = isFijo(t);
                 const pctPropio = (t.porcentaje_propio ?? (esComp ? 50 : 100)) / 100;
-                const totalPropio = esComp ? t.monto_total * pctPropio : t.monto_total;
+                const mesMonto = getMontoMes(t, stats.mesReferencia, cuotasOverrides);
                 const esCuota = t.cuotas_totales > 1;
-                const cuotaNominal = t.monto_cuota || (esCuota ? t.monto_total / t.cuotas_totales : t.monto_total);
+                const cuotaNominal = (mesMonto > 0) ? mesMonto : (t.monto_cuota || (esCuota ? t.monto_total / t.cuotas_totales : t.monto_total));
                 const cuotaPropia = esComp ? cuotaNominal * pctPropio : cuotaNominal;
+                const totalPropio = (esFijo && mesMonto > 0) ? (esComp ? mesMonto * pctPropio : mesMonto) : (esComp ? t.monto_total * pctPropio : t.monto_total);
                 const montoPrincipal = modoMontoGrid === 'cuota' && esCuota ? cuotaPropia : totalPropio;
 
                 return (
@@ -822,10 +850,11 @@ export default function MovimientosGrid() {
           const esComp = isCompartido(t);
           const esFijo = isFijo(t);
           const pctPropio = (t.porcentaje_propio ?? (esComp ? 50 : 100)) / 100;
-          const totalPropio = esComp ? t.monto_total * pctPropio : t.monto_total;
+          const mesMonto = getMontoMes(t, stats.mesReferencia, cuotasOverrides);
           const esCuota = t.cuotas_totales > 1;
-          const cuotaNominal = t.monto_cuota || (esCuota ? t.monto_total / t.cuotas_totales : t.monto_total);
+          const cuotaNominal = (mesMonto > 0) ? mesMonto : (t.monto_cuota || (esCuota ? t.monto_total / t.cuotas_totales : t.monto_total));
           const cuotaPropia = esComp ? cuotaNominal * pctPropio : cuotaNominal;
+          const totalPropio = (esFijo && mesMonto > 0) ? (esComp ? mesMonto * pctPropio : mesMonto) : (esComp ? t.monto_total * pctPropio : t.monto_total);
           const montoPrincipal = modoMontoGrid === 'cuota' && esCuota ? cuotaPropia : totalPropio;
 
           return (

@@ -18,7 +18,12 @@ import {
 
 type ModoMonto = 'total' | 'propio';
 
-function getMontoMes(t: Transaccion, targetYM: string, modo: ModoMonto = 'total'): number {
+function getMontoMes(
+  t: Transaccion,
+  targetYM: string,
+  modo: ModoMonto = 'total',
+  cuotasOverrides?: Map<string, number>,
+): number {
   const startYM = (t.fecha_primera_cuota || t.fecha_compra).slice(0, 7);
   const esF = isFijo(t);
   const esC = isCompartido(t);
@@ -27,13 +32,24 @@ function getMontoMes(t: Transaccion, targetYM: string, modo: ModoMonto = 'total'
   let valor = 0;
   if (esF) {
     if (startYM <= targetYM) {
-      valor = t.monto_cuota || t.monto_total;
+      const diff = monthDiff(startYM, targetYM);
+      const nroCuota = diff + 1;
+      const customKey = `${t.id}:${nroCuota}`;
+      if (cuotasOverrides && cuotasOverrides.has(customKey)) {
+        valor = cuotasOverrides.get(customKey)!;
+      } else {
+        const baseMonto = t.monto_cuota > 0 ? t.monto_cuota : (t.cuotas_totales > 1 ? t.monto_total / t.cuotas_totales : t.monto_total);
+        valor = baseMonto;
+      }
     }
   } else if (t.cuotas_totales > 1) {
     const diff = monthDiff(startYM, targetYM);
     const nroCuota = t.cuota_actual + diff;
     if (nroCuota >= t.cuota_actual && nroCuota <= t.cuotas_totales) {
-      if (nroCuota === t.cuotas_totales) {
+      const customKey = `${t.id}:${nroCuota}`;
+      if (cuotasOverrides && cuotasOverrides.has(customKey)) {
+        valor = cuotasOverrides.get(customKey)!;
+      } else if (nroCuota === t.cuotas_totales) {
         const resto = t.monto_total - t.monto_cuota * (t.cuotas_totales - 1);
         valor = resto > 0 ? resto : t.monto_cuota || t.monto_total / t.cuotas_totales;
       } else {
@@ -94,18 +110,33 @@ export default function ExcelMatrixGrid() {
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const [incluirSimulaciones, setIncluirSimulaciones] = useState(true);
   const [simMovimientos, setSimMovimientos] = useState<{ mov: SimMovimiento; escenarioNombre: string }[]>([]);
+  const [cuotasOverrides, setCuotasOverrides] = useState<Map<string, number>>(new Map());
 
   const currentYM = todayISO().slice(0, 7);
 
   const load = useCallback(async () => {
-    const { data } = await getSupabase()
-      .from('transacciones')
-      .select('id,tipo,naturaleza,porcentaje_propio,pagado_por,compartido_con,saldado,fecha_saldado,es_recurrente,descripcion,monto_total,monto_cuota,cuotas_totales,cuota_actual,fecha_compra,fecha_primera_cuota,categoria_id,cuenta_id')
-      .order('fecha_compra', { ascending: false });
+    const sb = getSupabase();
+    const [txRes, cuotasRes] = await Promise.all([
+      sb
+        .from('transacciones')
+        .select('id,tipo,naturaleza,porcentaje_propio,pagado_por,compartido_con,saldado,fecha_saldado,es_recurrente,descripcion,monto_total,monto_cuota,cuotas_totales,cuota_actual,fecha_compra,fecha_primera_cuota,categoria_id,cuenta_id')
+        .order('fecha_compra', { ascending: false }),
+      sb
+        .from('transacciones_cuotas')
+        .select('transaccion_id,nro_cuota,monto_cuota'),
+    ]);
 
-    if (data) {
+    if (cuotasRes.data) {
+      const map = new Map<string, number>();
+      for (const c of cuotasRes.data) {
+        map.set(`${c.transaccion_id}:${c.nro_cuota}`, Number(c.monto_cuota));
+      }
+      setCuotasOverrides(map);
+    }
+
+    if (txRes.data) {
       setRows(
-        data.map((r: any) => ({
+        txRes.data.map((r: any) => ({
           ...r,
           monto_total: Number(r.monto_total),
           monto_cuota: Number(r.monto_cuota),
@@ -180,11 +211,11 @@ export default function ExcelMatrixGrid() {
     return orderedKeys.map((nombre) => {
       const items = map.get(nombre)!;
       const subtotales = meses12.map(({ ym }) => {
-        return items.reduce((sum, item) => sum + getMontoMes(item, ym, modo), 0);
+        return items.reduce((sum, item) => sum + getMontoMes(item, ym, modo, cuotasOverrides), 0);
       });
       return { nombre, items, subtotales };
     });
-  }, [filteredRows, ctaMap, meses12, modo]);
+  }, [filteredRows, ctaMap, meses12, modo, cuotasOverrides]);
 
   // Subtotales simulados por mes
   const simSubtotales = useMemo(() => {
@@ -203,10 +234,10 @@ export default function ExcelMatrixGrid() {
     return meses12.map(({ ym }, idx) => {
       const realIngresos = (filteredRows || [])
         .filter((r) => r.tipo === 'ingreso')
-        .reduce((sum, item) => sum + getMontoMes(item, ym, modo), 0);
+        .reduce((sum, item) => sum + getMontoMes(item, ym, modo, cuotasOverrides), 0);
       const realEgresos = (filteredRows || [])
         .filter((r) => r.tipo === 'egreso')
-        .reduce((sum, item) => sum + getMontoMes(item, ym, modo), 0);
+        .reduce((sum, item) => sum + getMontoMes(item, ym, modo, cuotasOverrides), 0);
       const sim = simSubtotales[idx] || 0;
       const totalEgresos = realEgresos + sim;
       const saldoNeto = realIngresos - totalEgresos;
@@ -216,7 +247,7 @@ export default function ExcelMatrixGrid() {
         saldo: saldoNeto,
       };
     });
-  }, [filteredRows, meses12, modo, simSubtotales]);
+  }, [filteredRows, meses12, modo, simSubtotales, cuotasOverrides]);
 
   // Gran total proyectado mensual (compatibilidad para egresos totales)
   const granTotalMeses = useMemo(() => {
@@ -251,7 +282,7 @@ export default function ExcelMatrixGrid() {
           esC ? `${t.porcentaje_propio}%` : '0',
           t.pagado_por === 'otro' ? 'Sofi' : 'Yo',
           ...meses12.map(({ ym }) => {
-            const v = getMontoMes(t, ym, modo);
+            const v = getMontoMes(t, ym, modo, cuotasOverrides);
             return v > 0 ? Math.round(v * 100) / 100 : 0;
           }),
         ];
@@ -627,7 +658,7 @@ export default function ExcelMatrixGrid() {
 
                               {/* Col 5..16: 12 Meses */}
                               {meses12.map(({ ym }, idx) => {
-                                const val = getMontoMes(t, ym, modo);
+                                const val = getMontoMes(t, ym, modo, cuotasOverrides);
                                 const isCurrent = idx === 0;
                                 return (
                                   <td
