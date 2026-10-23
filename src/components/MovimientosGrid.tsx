@@ -522,8 +522,8 @@ export default function MovimientosGrid() {
       {/* Tarjetas resumen superiores */}
       <div className={`grid gap-3 ${
         mostrarDesgloseCompartidos
-          ? (mostrarDeudaTotal ? 'grid-cols-2 lg:grid-cols-6' : 'grid-cols-2 lg:grid-cols-5')
-          : (mostrarDeudaTotal ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-2 lg:grid-cols-3')
+          ? (mostrarDeudaTotal ? 'grid-cols-2 lg:grid-cols-7' : 'grid-cols-2 lg:grid-cols-6')
+          : (mostrarDeudaTotal ? 'grid-cols-2 lg:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4')
       }`}>
         <div className="glass animate-rise p-4">
           <p className="label text-[11px]">Egresos del mes</p>
@@ -536,6 +536,49 @@ export default function MovimientosGrid() {
           <p className="text-[11px] text-jade">ingresado en el mes</p>
         </div>
 
+        {/* Card: Déficit o Superávit del mes */}
+        {(() => {
+          const resultado = stats.mes.ingresos - stats.mes.egresos;
+          const esSuperavit = resultado >= 0;
+
+          return (
+            <div
+              className={`glass animate-rise p-4 [animation-delay:90ms] ${
+                esSuperavit
+                  ? 'border-emerald-500/30 bg-emerald-500/5'
+                  : 'border-rose-500/30 bg-rose-500/5'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-1">
+                <p className={`label text-[11px] ${esSuperavit ? 'text-emerald-300' : 'text-rose-300'}`}>
+                  {esSuperavit ? 'Superávit del mes' : 'Déficit del mes'}
+                </p>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${
+                    esSuperavit
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                  }`}
+                >
+                  {esSuperavit ? 'Superávit' : 'Déficit'}
+                </span>
+              </div>
+              <p
+                className={`num mt-1 text-2xl font-bold ${
+                  esSuperavit ? 'text-income' : 'text-debt'
+                }`}
+              >
+                {esSuperavit ? `+${money(resultado)}` : `-${money(Math.abs(resultado))}`}
+              </p>
+              <p className="text-[11px] text-jade">
+                {esSuperavit
+                  ? `capacidad de ahorro en ${monthLabel(stats.mesReferencia + '-01', { month: 'short' })}`
+                  : `gastos superan ingresos en ${monthLabel(stats.mesReferencia + '-01', { month: 'short' })}`}
+              </p>
+            </div>
+          );
+        })()}
+
         {/* Card Neteada: Saldo a cobrar si me deben o Saldo a pagar si debo */}
         {(() => {
           const saldoNeto = stats.mes.pendientesCobro - stats.mes.pendientesPago;
@@ -545,8 +588,6 @@ export default function MovimientosGrid() {
           return (
             <div
               className={`glass animate-rise p-4 [animation-delay:120ms] ${
-                !mostrarDesgloseCompartidos && !mostrarDeudaTotal ? 'col-span-2 lg:col-span-1' : ''
-              } ${
                 esCobrar
                   ? 'border-emerald-500/30 bg-emerald-500/5'
                   : esPagar
